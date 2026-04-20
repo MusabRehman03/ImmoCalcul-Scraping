@@ -1,0 +1,28 @@
+fastapi
+uvicorn
+playwright
+pyngrok
+python-dotenv
+Pillow
+img2pdf
+PyPDF2
+google-api-python-client
+google-auth
+google-auth-httplib2
+# Web Server
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+
+# Web Scraping
+playwright
+
+# File & Image Processing
+Pillow
+img2pdf
+python-docx
+
+# Google API
+google-api-python-client
+google-auth-oauthlib

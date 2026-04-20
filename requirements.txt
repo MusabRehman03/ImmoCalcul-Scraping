@@ -1,0 +1,20 @@
+# FastAPI
+fastapi
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+
+# Google APIs
+gspread>=5.12.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+google-api-python-client>=2.108.0
+
+# Scraper dependencies
+playwright>=1.40.0
+Pillow>=10.1.0
+img2pdf>=0.5.0
+python-docx>=1.1.0
+pikepdf>=8.0.0
+requests>=2.31.0

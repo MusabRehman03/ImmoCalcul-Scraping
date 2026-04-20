@@ -1,0 +1,54 @@
+[
+    {
+        "domain": "immocalcul.com",
+        "expirationDate": 1806012586.880921,
+        "hostOnly": true,
+        "httpOnly": true,
+        "name": "ImmocalculFlag",
+        "path": "/",
+        "sameSite": "strict",
+        "secure": true,
+        "session": false,
+        "storeId": null,
+        "value": "0"
+    },
+    {
+        "domain": "immocalcul.com",
+        "expirationDate": 1806012586.880828,
+        "hostOnly": true,
+        "httpOnly": true,
+        "name": "ImmocalculPixel",
+        "path": "/",
+        "sameSite": "strict",
+        "secure": true,
+        "session": false,
+        "storeId": null,
+        "value": "cb0f96a6747f0bca3cdf0a108dfce1c2"
+    },
+    {
+        "domain": ".immocalcul.com",
+        "expirationDate": 1774478452,
+        "hostOnly": false,
+        "httpOnly": false,
+        "name": "_hjSession_3880964",
+        "path": "/",
+        "sameSite": "no_restriction",
+        "secure": true,
+        "session": false,
+        "storeId": null,
+        "value": "eyJpZCI6IjM4NDJjYzkzLTJmYzktNDNkZS05NzQ2LWUxZjU2ODI1N2IyZCIsImMiOjE3NzQ0NzY1ODgzMjksInMiOjAsInIiOjAsInNiIjowLCJzciI6MCwic2UiOjAsImZzIjoxLCJzcCI6MH0="
+    },
+    {
+        "domain": ".immocalcul.com",
+        "expirationDate": 1806012588,
+        "hostOnly": false,
+        "httpOnly": false,
+        "name": "_hjSessionUser_3880964",
+        "path": "/",
+        "sameSite": "no_restriction",
+        "secure": true,
+        "session": false,
+        "storeId": null,
+        "value": "eyJpZCI6ImIyNmZlYmJmLWFhNmEtNTNiOC1iMTU2LTI0MTMyNDE5M2EzZiIsImNyZWF0ZWQiOjE3NzQ0NzY1ODgzMjksImV4aXN0aW5nIjpmYWxzZX0="
+    }
+]

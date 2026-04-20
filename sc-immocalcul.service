@@ -1,0 +1,38 @@
+[Unit]
+Description=SC ImmoCalcul FastAPI (Gunicorn + Uvicorn workers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bots
+Group=bots
+WorkingDirectory=/home/bots/modules/SC-ImmoCalcul
+Environment="DOTENV_PATH=/home/bots/modules/SC-ImmoCalcul/.env"
+ExecStart=/home/bots/modules/SC-ImmoCalcul/venv/bin/gunicorn -c gunicorn_conf.py app:app
+Restart=on-failure
+RestartSec=5
+
+# Resource & security hardening (tune as needed)
+UMask=027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+MemoryAccounting=true
+CPUAccounting=true
+TimeoutStopSec=45
+KillMode=mixed
+# If using Playwright/Chromium you may need to relax some protections:
+# (Chromium sometimes needs /dev/shm write; PrivateDevices breaks it)
+# PrivateDevices=false
+
+# Increase file descriptors if needed for many concurrent connections
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

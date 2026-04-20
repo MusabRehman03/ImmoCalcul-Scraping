@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Secrets
+.env
+credentials.json
+token.json
+
+# Logs
+logs/
+error_log
+access_log
+error.txt
+
+# Runtime data
+run_steps/
+profiles/
+Chromium_Automation/
+Chromium_Automation_backup/
+
+# OS junk
+.DS_Store
+
+# Temp / system
+*.sock
+=

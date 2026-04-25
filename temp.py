@@ -23,7 +23,6 @@ import random
 import sys
 import traceback
 import logging
-import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -438,9 +437,26 @@ async def get_risk_issue_headings(page: Page) -> List[str]:
 async def capture_main_photo(page: Page, out_dir: Path, sc: StepCapture) -> Optional[str]:
     set_step("photo-main")
     try:
-        img_el = page.locator(MAIN_PHOTO_XPATH).first
+        # Prefer the stable CSS selector for the street-view/main photo image
+        img_el = page.locator(".dataAdress_imageStreet__0DiT3").first
+
+        # Ensure network settles before checking the main photo (some assets load via XHR/tile requests)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=60000)
+            logging.info("Network became idle before main photo check.")
+        except Exception:
+            logging.debug("Network did not become idle within 60s before main photo check; proceeding anyway.")
+
+        # Extra settle time
+        await page.wait_for_timeout(3000)
+
+        # Wait briefly for the main photo to appear; some pages load the image a bit later
+        try:
+            await img_el.wait_for(state="visible", timeout=5000)
+        except Exception:
+            logging.debug("Main photo did not become visible within 5s; checking visibility anyway.")
         if not await img_el.is_visible():
-            logging.info("Main photo element not found.")
+            logging.info("Main photo element not found or not visible after wait.")
             return None
         raw_path = out_dir / "main_photo_raw.png"
         await img_el.screenshot(path=str(raw_path))
@@ -718,7 +734,7 @@ def error_file(message):
 
 async def create_context(pw, args, out_dir: Path):
     """Creates a robust browser context using Chromium browser on macOS."""
-    viewport = {"width": args.viewport_width, "height": args.viewport_height}
+    viewport = {"width": 1920, "height": 1080}
     
     # Minimal launch args - avoid automation detection
     launch_args = [
@@ -732,20 +748,9 @@ async def create_context(pw, args, out_dir: Path):
     logging.info(f"Using Chromium automation profile: {automation_profile}")
     logging.info("Using Playwright's bundled Chromium browser.")
     
-    # Setup video recording directory if requested
-    record_video_dir = None
-    if getattr(args, 'record_video', False):
-        try:
-            vid_dir = out_dir / "video"
-            vid_dir.mkdir(parents=True, exist_ok=True)
-            record_video_dir = str(vid_dir)
-            logging.info(f"Video recording enabled: {record_video_dir}")
-        except Exception as e:
-            logging.warning(f"Could not create video directory: {e}")
-            record_video_dir = None
-    
     try:
-        # Load proxy from environment
+        # Use persistent context with automation profile - no executable_path means use Playwright's Chromium
+         # Load proxy from environment
         proxy_host = os.getenv("PROXY_HOST")
         proxy_port = os.getenv("PROXY_PORT")
         proxy_user = os.getenv("PROXY_USER")
@@ -760,6 +765,16 @@ async def create_context(pw, args, out_dir: Path):
             }
             logging.info(f"Using proxy: {proxy_host}:{proxy_port}")
         
+        # Optionally enable video recording into the run's output folder
+        record_video_dir = None
+        if getattr(args, 'record_video', False):
+            try:
+                vid_dir = out_dir / "video"
+                vid_dir.mkdir(parents=True, exist_ok=True)
+                record_video_dir = str(vid_dir)
+            except Exception:
+                record_video_dir = None
+
         context = await pw.chromium.launch_persistent_context(
             user_data_dir=automation_profile,
             headless=False,
@@ -774,8 +789,8 @@ async def create_context(pw, args, out_dir: Path):
                 "sec-ch-ua": '"Chromium";v="136", "Not-A.Brand";v="24", "Google Chrome";v="136"',
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"Windows"',
-            },
-            **({"record_video_dir": record_video_dir} if record_video_dir else {})
+            }
+            , **({"record_video_dir": record_video_dir} if record_video_dir else {})
         )
         # Minimal anti-bot detection script
         await context.add_init_script("""
@@ -805,22 +820,38 @@ async def robust_autocomplete(page: Page, search_field: Locator, query: str):
     await search_field.type(query, delay=70)
 
     try:
-        await page.wait_for_load_state("networkidle", timeout=5000)
+        await page.wait_for_load_state("networkidle", timeout=50000)
     except PWTimeoutError:
         logging.debug("Network did not go idle after typing, proceeding anyway.")
 
-    suggestion = page.locator(AUTOCOMPLETE_ADDR_XPATH).first
-    for attempt in range(7):
-        if await suggestion.count() > 0 and await suggestion.is_visible():
-            logging.info(f"Autocomplete suggestion found on attempt {attempt+1}. Clicking it.")
-            await suggestion.click()
-            return
-        logging.debug(f"Suggestion not visible on attempt {attempt+1}. Nudging with ArrowDown.")
-        await page.keyboard.press("ArrowDown")
-        await asyncio.sleep(0.4)
+    # First try: click the specific icon container inside the result (disappears after click)
+    icon_locator = page.locator("//div[contains(@class,'ElasticSearchAutocomplete_iconContainer__Upl0q')]").first
+    try:
+        if await icon_locator.count() > 0 and await icon_locator.is_visible():
+            logging.info("Autocomplete icon container visible; clicking it.")
+            await icon_locator.click()
+            logging.info("Autocomplete icon container clicked.")
+            return True
+    except Exception:
+        logging.debug("Icon container not clickable or not present; falling back to result item.")
 
-    logging.warning("Autocomplete suggestion not found after multiple attempts. Pressing 'Enter' as fallback.")
-    await search_field.press("Enter")
+    # # Fallback: try the result item (may have different classes)
+    # suggestion = page.locator(AUTOCOMPLETE_ADDR_XPATH).first
+    # for attempt in range(7):
+    #     try:
+    #         if await suggestion.count() > 0 and await suggestion.is_visible():
+    #             logging.info(f"Autocomplete suggestion found on attempt {attempt+1}. Clicking it.")
+    #             await suggestion.click()
+    #             return True
+    #     except Exception:
+    #         pass
+    #     logging.debug(f"Suggestion not visible on attempt {attempt+1}. Nudging with ArrowDown.")
+    #     await page.keyboard.press("ArrowDown")
+    #     await asyncio.sleep(0.4)
+
+    # logging.warning("Autocomplete suggestion not found after multiple attempts. Pressing 'Enter' as fallback.")
+    # await search_field.press("Enter")
+    return False
 
 
 async def do_sequence(args) -> Dict[str, Any]:
@@ -829,7 +860,11 @@ async def do_sequence(args) -> Dict[str, Any]:
     out_dir = Path("run_steps") / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     
-    logging.info(f"Output directory: {out_dir}")
+    try:
+        full_out_dir = str(out_dir.resolve())
+    except Exception:
+        full_out_dir = str(out_dir)
+    logging.info(f"Output directory: {out_dir} (full path: {full_out_dir})")
 
     email = args.email or os.getenv("IMMOCALCUL_EMAIL")
     password = args.password or os.getenv("IMMOCALCUL_PASSWORD")
@@ -837,28 +872,6 @@ async def do_sequence(args) -> Dict[str, Any]:
         set_step("invalid-credentials")
         logging.critical("Missing IMMOCALCUL_EMAIL or IMMOCALCUL_PASSWORD in environment.")
         raise ValueError("Missing email or password credentials.")
-
-    # Setup virtual display if requested
-    xvfb_process = None
-    if getattr(args, 'virtual_display', False) and not sys.platform.startswith('darwin'):
-        try:
-            logging.info("Starting virtual display (Xvfb)...")
-            xvfb_process = subprocess.Popen(
-                ['Xvfb', ':99', '-screen', '0', '1366x768x24'],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            os.environ['DISPLAY'] = ':99'
-            logging.info("Virtual display started on :99")
-            await asyncio.sleep(1)  # Give Xvfb time to start
-        except FileNotFoundError:
-            logging.warning("Xvfb not found. Install with: apt-get install xvfb (Linux only)")
-            xvfb_process = None
-        except Exception as e:
-            logging.warning(f"Could not start virtual display: {e}")
-            xvfb_process = None
-    elif getattr(args, 'virtual_display', False) and sys.platform.startswith('darwin'):
-        logging.warning("Virtual display (Xvfb) is only supported on Linux. Skipping for macOS.")
 
     summary: Dict[str, Any] = {
         "email_used": email,
@@ -893,12 +906,13 @@ async def do_sequence(args) -> Dict[str, Any]:
 
     async with async_playwright() as pw:
         context = await create_context(pw, args, out_dir)
-        
-        # Start tracing if requested
-        if args.trace:
-            await context.tracing.start(screenshots=True, snapshots=True)
-            logging.info("Playwright tracing started")
-        
+        # Start Playwright tracing if requested (will be stopped in finally)
+        if getattr(args, 'trace', False):
+            try:
+                await context.tracing.start(screenshots=True, snapshots=True, sources=True)
+                logging.info("Playwright tracing started for this run.")
+            except Exception as e:
+                logging.warning(f"Could not start Playwright tracing: {e}")
         page = context.pages[0] if context.pages else await context.new_page()
         page.set_default_timeout(args.selector_timeout)
         page.set_default_navigation_timeout(args.navigation_timeout)
@@ -916,12 +930,39 @@ async def do_sequence(args) -> Dict[str, Any]:
             await page.goto("https://immocalcul.com/immobilier", timeout=90000, wait_until="domcontentloaded")
             await asyncio.sleep(1.2) # Extra settle time for scripts
 
-            # Check for the account/subscription info `div` to see if we're logged in.
-            account_div_selector = "//div[contains(@class,'map_abonnement__')]"
+            # Wait for any of the primary UI indicators to appear before deciding login state:
+            # - search fields (#searchField or #searchFieldLot)
+            # - account header (Header_contour_profil__VJbHt)
+            # - old subscription div (map_abonnement__)
+            # - a visible 'Connexion' button/span
             try:
-                await page.locator(account_div_selector).first.wait_for(timeout=5000)
-                logging.info("Account info div found. Already logged in.")
-            except PWTimeoutError:
+                await page.wait_for_function(
+                    "() => !!(document.querySelector('#searchField') || document.querySelector('#searchFieldLot') || document.querySelector('div.Header_contour_profil__VJbHt') || document.querySelector('div.map_abonnement__') || Array.from(document.querySelectorAll('span')).some(s=>s.textContent && s.textContent.includes('Connexion')))",
+                    timeout=90000,
+                )
+            except Exception:
+                logging.debug("Initial UI indicators did not appear within timeout; continuing to check selectors anyway.")
+
+            # Check for the account/subscription info `div` to see if we're logged in.
+            account_div_selectors = [
+                "//div[contains(@class,'Header_contour_profil__VJbHt')]",
+                "//div[contains(@class,'map_abonnement__')]",
+            ]
+            logged_in = False
+            for account_div_selector in account_div_selectors:
+                try:
+                    # quick check without blocking too long
+                    if await page.locator(account_div_selector).first.count() > 0:
+                        # wait a short moment for visibility
+                        await page.locator(account_div_selector).first.wait_for(timeout=3000)
+                        logging.info(f"Account info div found ({account_div_selector}). Already logged in.")
+                        logged_in = True
+                        break
+                except Exception:
+                    continue
+
+            if not logged_in:
+                # If we reach here, the account div wasn't visible. Only then perform login.
                 logging.info("Account info div not found. Performing login...")
                 await page.locator("//span[contains(text(),'Connexion')]").first.click()
                 await page.fill("//input[@type='email']", email)
@@ -945,22 +986,121 @@ async def do_sequence(args) -> Dict[str, Any]:
             search_field = page.locator(search_selector)
             await robust_autocomplete(page, search_field, search_query)
 
+
             # Wait for property content to load after search selection
             try:
-                # Wait for autocomplete suggestion and click it if available
-                suggestion = page.locator("//div[contains(@class,'ElasticSearchAutocomplete_resultItem')]").first
+                # If the autocomplete click succeeded, the property panel should begin loading.
+                # Give it a short settle time and then rely on specific selectors rather than
+                # networkidle which is brittle for maps/websockets.
+                await asyncio.sleep(1)
+
+                # Best-effort: click the small result card that sometimes appears after autocomplete
+                # (exact class observed: `map_cardResultMap__OIkya`). Clicking it opens the
+                # property panel UI in some site variants. Non-fatal if not present.
+                # try:
+                #     card_locator = page.locator("//div[contains(@class,'map_cardResultMap__OIkya')]").first
+                #     if await card_locator.count() > 0 and await card_locator.is_visible():
+                #         await card_locator.click()
+                #         logging.info("Clicked map card result to open property panel.")
+                # except Exception:
+                #     logging.debug("Map card result not present or not clickable; continuing.")
+
+                # Prefer clicking the stable CSS selector for the address span when available
+                # (example: <span class="map_adresseproperty__Q7GLP">...</span>)
                 try:
-                    await suggestion.wait_for(state="visible", timeout=8000)
-                    await suggestion.click()
-                    logging.info("Clicked autocomplete suggestion.")
+                    css_addr = "span.map_adresseproperty__Q7GLP"
+                    clicked_addr = False
+
+                    # Try CSS-first (user confirmed suffix Q7GLP is stable)
+                    try:
+                        if await page.locator(".map_adresseproperty__Q7GLP").count() > 0:
+                            logging.debug("span found with class: map_adresseproperty__Q7GLP")
+                            addr_locator = page.locator(css_addr).first
+                            try:
+                                await addr_locator.wait_for(state="visible", timeout=5000)
+                            except Exception:
+                                pass
+                            txt = None
+                            try:
+                                txt = (await addr_locator.inner_text()).strip()
+                            except Exception:
+                                pass
+                            try:
+                                await addr_locator.scroll_into_view_if_needed()
+                            except Exception:
+                                pass
+                            try:
+                                await addr_locator.click(force=True)
+                                logging.info(f"Clicked address result element (css: {css_addr}){(': ' + txt) if txt else ''}.")
+                                clicked_addr = True
+                            except Exception:
+                                logging.debug("Direct CSS click failed; attempting JS fallback for CSS selector.")
+                                try:
+                                    js_result = await page.evaluate(
+                                        "selector => { const el = document.querySelector(selector); if(!el) return null; el.scrollIntoView(); el.click(); return el.textContent || null; }",
+                                        css_addr,
+                                    )
+                                    if js_result:
+                                        logging.info(f"Clicked address result element via JS fallback: {js_result} (css: {css_addr}).")
+                                        clicked_addr = True
+                                except Exception:
+                                    logging.debug("JS fallback for CSS selector failed.")
+                    except Exception:
+                        logging.debug("CSS selector check failed; falling back to XPath attempts.")
+
+                    # Fallback: try both the double-underscore variant and the generic class-containing variant via XPath
+                    if not clicked_addr:
+                        addr_xpaths = [
+                            "//span[contains(@class,'map_adresseproperty__Q7GLP')]",
+                            "//span[contains(@class,'map_adresseproperty')]",
+                        ]
+                        for ax in addr_xpaths:
+                            try:
+                                await page.wait_for_selector(ax, timeout=8000)
+                                addr_locator = page.locator(ax).first
+                                if await addr_locator.count() > 0:
+                                    try:
+                                        await addr_locator.wait_for(state="visible", timeout=3000)
+                                    except Exception:
+                                        pass
+                                    try:
+                                        txt = None
+                                        try:
+                                            txt = (await addr_locator.inner_text()).strip()
+                                        except Exception:
+                                            pass
+                                        try:
+                                            await addr_locator.scroll_into_view_if_needed()
+                                        except Exception:
+                                            pass
+                                        await addr_locator.click(force=True)
+                                        logging.info(f"Clicked address result element{(': ' + txt) if txt else ''} (xpath: {ax}).")
+                                        clicked_addr = True
+                                        break
+                                    except Exception:
+                                        logging.debug(f"Direct click failed for xpath {ax}; will try JS click fallback.")
+                                        try:
+                                            js_result = await page.evaluate(
+                                                "xpath => { const el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; if(!el) return null; el.scrollIntoView(); el.click(); return el.textContent || null; }",
+                                                ax,
+                                            )
+                                            if js_result:
+                                                logging.info(f"Clicked address result element via JS fallback: {js_result} (xpath: {ax}).")
+                                                clicked_addr = True
+                                                break
+                                        except Exception:
+                                            logging.debug(f"JS fallback click failed for xpath {ax}.")
+                            except Exception:
+                                continue
+
+                    if not clicked_addr:
+                        logging.debug("Address result element not present or not clickable; continuing.")
                 except Exception:
-                    logging.info("No autocomplete suggestion, trying Enter fallback.")
-                    search_field = page.locator("#searchFieldLot")
-                    await search_field.press("Enter")
+                    logging.debug("Address result element check failed; continuing.")
 
                 # Wait for property panel to become naturally visible
-                await asyncio.sleep(3)
-                await page.wait_for_load_state("networkidle", timeout=30000)
+                await asyncio.sleep(2)
+                # avoid networkidle for maps/websockets
 
                 # Wait for panel to be visible
                 panel_visible = False
@@ -971,7 +1111,7 @@ async def do_sequence(args) -> Dict[str, Any]:
                 ]:
                     try:
                         el = page.locator(selector).first
-                        await el.wait_for(state="visible", timeout=15000)
+                        await el.wait_for(state="visible", timeout=30000)
                         panel_visible = True
                         logging.info(f"Property panel visible: {selector}")
                         break
@@ -1064,20 +1204,159 @@ async def do_sequence(args) -> Dict[str, Any]:
             summary["active_text_main"] = await get_all_text_active(page)
 
             # --- Main tab capture ---
-            await page.wait_for_timeout(200)
-            await sc.shot_xpath_zoomfit(page, DATA_SECTION_XPATH, "main_tab_zoom33", zoom=0.50)
-            photo_path = await capture_main_photo(page, out_dir, sc)
-            summary["main_photo_local_path"] = photo_path
-
-            # --- Measures tab ---
             try:
-                await page.locator("//div[contains(@class,'dataAdress_containertabs')]//button[4]").click()
-                await page.wait_for_load_state("networkidle")
-                summary["active_text_measures"] = await get_all_text_active(page)
-                await page.wait_for_timeout(200)
-                await sc.shot_xpath_zoomfit(page, DATA_SECTION_XPATH, "measures_tab_zoom33", zoom=0.50)
+                # Wait for network to become idle (maps/assets may load slowly)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=120000)
+                    logging.info("Network became idle before main tab capture.")
+                except Exception:
+                    logging.debug("Network did not become idle within 120s before main tab capture; proceeding anyway.")
+
+                # Extra settle time requested by user
+                await page.wait_for_timeout(3000)
+
+                await sc.shot_xpath_zoomfit(page, DATA_SECTION_XPATH, "main_tab_zoom33", zoom=0.50)
+                photo_path = await capture_main_photo(page, out_dir, sc)
+                summary["main_photo_local_path"] = photo_path
             except Exception as e:
-                logging.warning(f"Measures tab failed: {e}")
+                logging.warning(f"Main tab capture failed: {e}")
+
+            # --- Measures tab (verbose diagnostics + multiple click strategies) ---
+            try:
+                set_step("measures")
+                logging.info("Opening Measures tab (trying multiple strategies: 'Mesures', 'Measures', button index, JS fallback)")
+
+                measures_clicked = False
+
+                # Strategy 1: exact text 'Mesures'
+                try:
+                    loc = page.get_by_text("Mesures", exact=True).first
+                    count = 0
+                    try:
+                        count = await loc.count()
+                    except Exception:
+                        count = 0
+                    if count > 0:
+                        logging.info("Found element by exact text 'Mesures'. Checking visibility and attempting click.")
+                        await asyncio.sleep(5)  # Wait for potential animations or delayed rendering
+                        try:
+                            try:
+                                await loc.wait_for(state="visible", timeout=10000)
+                            except Exception:
+                                logging.debug("'Mesures' element present but not visible within 3s.")
+                            outer = None
+                            try:
+                                outer = await loc.evaluate("el => el.outerHTML")
+                            except Exception:
+                                outer = None
+                            logging.debug(f"'Mesures' outerHTML: {outer}")
+                            await loc.click(force=True)
+                            logging.info("Clicked 'Mesures' element.")
+                            measures_clicked = True
+                        except Exception as e:
+                            logging.warning(f"Click on 'Mesures' locator failed: {e}")
+                except Exception:
+                    logging.debug("Strategy 'Mesures' raised an error; continuing to next strategy.")
+
+                # Strategy 2: exact text 'Measures'
+                if not measures_clicked:
+                    try:
+                        loc2 = page.get_by_text("Measures", exact=True).first
+                        cnt2 = 0
+                        try:
+                            cnt2 = await loc2.count()
+                        except Exception:
+                            cnt2 = 0
+                        if cnt2 > 0:
+                            logging.info("Found element by exact text 'Measures'. Trying to click.")
+                            try:
+                                try:
+                                    await loc2.wait_for(state="visible", timeout=3000)
+                                except Exception:
+                                    logging.debug("'Measures' element present but not visible within 3s.")
+                                outer2 = None
+                                try:
+                                    outer2 = await loc2.evaluate("el => el.outerHTML")
+                                except Exception:
+                                    outer2 = None
+                                logging.debug(f"'Measures' outerHTML: {outer2}")
+                                await loc2.click(force=True)
+                                logging.info("Clicked 'Measures' element.")
+                                measures_clicked = True
+                            except Exception as e:
+                                logging.warning(f"Click on 'Measures' locator failed: {e}")
+                    except Exception:
+                        logging.debug("Strategy 'Measures' raised an error; continuing to next strategy.")
+
+                # Strategy 3: old button index (fallback)
+                if not measures_clicked:
+                    try:
+                        btn = page.locator("//div[contains(@class,'dataAdress_containertabs')]//button[4]").first
+                        cntb = 0
+                        try:
+                            cntb = await btn.count()
+                        except Exception:
+                            cntb = 0
+                        if cntb > 0:
+                            logging.info("Found measures button by index (button[4]). Checking visibility and attempting click.")
+                            try:
+                                try:
+                                    await btn.wait_for(state="visible", timeout=3000)
+                                except Exception:
+                                    logging.debug("Button[4] present but not visible within 3s.")
+                                try:
+                                    outerb = await btn.evaluate("el => el.outerHTML")
+                                except Exception:
+                                    outerb = None
+                                logging.debug(f"Button[4] outerHTML: {outerb}")
+                                await btn.click()
+                                logging.info("Clicked measures button (button[4]).")
+                                measures_clicked = True
+                            except Exception as e:
+                                logging.warning(f"Click on measures button (button[4]) failed: {e}")
+                    except Exception:
+                        logging.debug("Strategy button[4] raised an error; continuing to JS fallback.")
+
+                # Strategy 4: JS fallback - find span text and click
+                if not measures_clicked:
+                    try:
+                        js_click = "() => { const spans = Array.from(document.querySelectorAll('span')); const s = spans.find(x => x.textContent && (x.textContent.trim() === 'Mesures' || x.textContent.trim() === 'Measures')); if(!s) return null; s.scrollIntoView(); s.click(); return s.outerHTML; }"
+                        js_result = await page.evaluate(js_click)
+                        if js_result:
+                            logging.info(f"Clicked Measures via JS fallback. Element outerHTML: {js_result}")
+                            measures_clicked = True
+                        else:
+                            logging.debug("JS fallback did not find a matching span for Measures.")
+                    except Exception as e:
+                        logging.debug(f"JS fallback for Measures raised an exception: {e}")
+
+                # After attempting clicks, verify whether the Measures content loaded
+                if measures_clicked:
+                    logging.info("Measures click attempted; waiting for networkidle then extra 5s before checking Measures container...")
+                    try:
+                        # First wait for network to settle (maps/websockets may delay networkidle)
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=60000)
+                            logging.info("Network became idle after Measures click.")
+                        except Exception:
+                            logging.debug("Network did not become idle within 15s after Measures click; continuing anyway.")
+
+                        # Extra settle time requested by user
+                        await page.wait_for_timeout(5000)
+
+                        # Then wait for the specific tab container that indicates the Measures view is open
+                        await page.wait_for_selector("div.dataAdress_tabContainer__U3QpC", timeout=60000)
+                        logging.info("Measures container found: div.dataAdress_tabContainer__U3QpC")
+                        summary["active_text_measures"] = await get_all_text_active(page)
+                        await page.wait_for_timeout(200)
+                        await sc.shot_xpath_zoomfit(page, DATA_SECTION_XPATH, "measures_tab_zoom33", zoom=0.50)
+                        logging.info("Measures content captured successfully.")
+                    except Exception as e:
+                        logging.warning(f"Measures container did not appear after click and waits: {e}")
+                else:
+                    logging.warning("Measures tab was not found or clickable using any strategy.")
+            except Exception as e:
+                logging.warning(f"Measures tab failed: {e}", exc_info=True)
 
             # --- Avis tab ---
             set_step("avis")
@@ -1260,13 +1539,14 @@ async def do_sequence(args) -> Dict[str, Any]:
                     await context.tracing.stop(path=str(trace_path))
                     logging.info(f"Playwright trace saved: {trace_path}")
                 except Exception: pass
-            
-            # Finalize video recording if enabled
+            # If video recording was enabled, attempt to finalize and rename video files
             if getattr(args, 'record_video', False):
                 try:
                     vid_dir = out_dir / "video"
+                    # Iterate pages and move any produced video to a nicer name
                     for idx, p in enumerate(context.pages, start=1):
                         try:
+                            # page.video may be None if recording not active for that page
                             if hasattr(p, 'video') and p.video:
                                 try:
                                     vpath = await p.video.path()
@@ -1278,27 +1558,17 @@ async def do_sequence(args) -> Dict[str, Any]:
                                     try:
                                         shutil.move(str(src), str(dest))
                                         logging.info(f"Saved video for page {idx}: {dest}")
+                                        summary_path = out_dir / 'video_files.txt'
+                                        with open(summary_path, 'a', encoding='utf-8') as sf:
+                                            sf.write(f"{dest}\n")
                                     except Exception as e:
                                         logging.warning(f"Could not move video {src} to {dest}: {e}")
                         except Exception:
                             continue
                 except Exception as e:
                     logging.warning(f"Finalizing recorded videos failed: {e}")
-            
+
             await context.close()
-    
-    # Cleanup virtual display if it was started
-    if xvfb_process:
-        try:
-            xvfb_process.terminate()
-            xvfb_process.wait(timeout=5)
-            logging.info("Virtual display stopped.")
-        except Exception as e:
-            logging.warning(f"Could not stop virtual display: {e}")
-            try:
-                xvfb_process.kill()
-            except Exception:
-                pass
 
 def build_arg_parser():
     p = argparse.ArgumentParser(description="Full step-by-step ImmoCalcul scraper using personal Google Drive.")
@@ -1318,7 +1588,6 @@ def build_arg_parser():
     p.add_argument("--viewport-width", type=int, default=1366, help="Viewport width for headless")
     p.add_argument("--viewport-height", type=int, default=768, help="Viewport height for headless")
     p.add_argument("--headless", action="store_true", default=False, help="Run headless (default: headed).")
-    p.add_argument("--virtual-display", action="store_true", default=False, help="Use virtual display (Xvfb) for Linux VPS simulation (headed mode with virtual screen).")
     p.add_argument("--trace", action="store_true", default=False, help="Record Playwright trace (trace.zip) for debugging")
     p.add_argument("--record-video", action="store_true", default=False, help="Record a screen video for the run (saved under run_steps/<run_id>/video)")
     p.add_argument("--selector-timeout", type=int, default=60000, help="Selector timeout ms")
@@ -1335,9 +1604,7 @@ def main():
         PARENT_FOLDER_ID = args.parent_folder_id
 
     if not PARENT_FOLDER_ID:
-        PARENT_FOLDER_ID = "1AubnRZyvIBTiWwjiG0UAXsHyKE4wqw47"  # Default to a known folder for testing, but should be overridden in production
-        logging.warning(f"PARENT_DRIVE_FOLDER_ID was not set. now set to {PARENT_FOLDER_ID}.")
-        
+        logging.warning("PARENT_DRIVE_FOLDER_ID is not set. Google Drive features will be skipped.")
 
     if args.fixed_delay is not None and args.fixed_delay < 0:
         sys.exit("Fixed delay must be >= 0")

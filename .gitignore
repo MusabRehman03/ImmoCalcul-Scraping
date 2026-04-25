@@ -26,3 +26,7 @@ Chromium_Automation_backup/
 # Temp / system
 *.sock
 =
+
+
+.venv
+.venv/

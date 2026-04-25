@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  scraper:
+    build: .
+    container_name: immocalcul-scraper
+    volumes:
+      - .:/app
+    environment:
+      - DISPLAY=:99
+      - IMMOCALCUL_EMAIL=${IMMOCALCUL_EMAIL}
+      - IMMOCALCUL_PASSWORD=${IMMOCALCUL_PASSWORD}
+      - PARENT_DRIVE_FOLDER_ID=${PARENT_DRIVE_FOLDER_ID}
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    command: /bin/bash

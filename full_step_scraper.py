@@ -805,7 +805,7 @@ async def robust_autocomplete(page: Page, search_field: Locator, query: str):
     await search_field.type(query, delay=70)
 
     try:
-        await page.wait_for_load_state("networkidle", timeout=5000)
+        await page.wait_for_load_state("networkidle", timeout=60000)
     except PWTimeoutError:
         logging.debug("Network did not go idle after typing, proceeding anyway.")
 
@@ -919,7 +919,7 @@ async def do_sequence(args) -> Dict[str, Any]:
             # Check for the account/subscription info `div` to see if we're logged in.
             account_div_selector = "//div[contains(@class,'map_abonnement__')]"
             try:
-                await page.locator(account_div_selector).first.wait_for(timeout=5000)
+                await page.locator(account_div_selector).first.wait_for(timeout=50000)
                 logging.info("Account info div found. Already logged in.")
             except PWTimeoutError:
                 logging.info("Account info div not found. Performing login...")
@@ -945,22 +945,24 @@ async def do_sequence(args) -> Dict[str, Any]:
             search_field = page.locator(search_selector)
             await robust_autocomplete(page, search_field, search_query)
 
-            # Wait for property content to load after search selection
+            # # Wait for property content to load after search selection
             try:
-                # Wait for autocomplete suggestion and click it if available
-                suggestion = page.locator("//div[contains(@class,'ElasticSearchAutocomplete_resultItem')]").first
-                try:
-                    await suggestion.wait_for(state="visible", timeout=8000)
-                    await suggestion.click()
-                    logging.info("Clicked autocomplete suggestion.")
-                except Exception:
-                    logging.info("No autocomplete suggestion, trying Enter fallback.")
-                    search_field = page.locator("#searchFieldLot")
-                    await search_field.press("Enter")
-
+            #     # Wait for autocomplete suggestion and click it if available
+                suggestion = page.locator(".map_adresseproperty__Q7GLP").first
+                await suggestion.wait_for(state="visible", timeout=8000)
+                await suggestion.click()
+                logging.info("Clicked address div.")
                 # Wait for property panel to become naturally visible
                 await asyncio.sleep(3)
                 await page.wait_for_load_state("networkidle", timeout=30000)
+            except Exception:
+                logging.info("No autocomplete suggestion, trying Enter fallback.")
+                search_field = page.locator("#searchFieldLot")
+                await search_field.press("Enter")
+
+            
+
+
 
                 # Wait for panel to be visible
                 panel_visible = False
@@ -971,7 +973,7 @@ async def do_sequence(args) -> Dict[str, Any]:
                 ]:
                     try:
                         el = page.locator(selector).first
-                        await el.wait_for(state="visible", timeout=15000)
+                        await el.wait_for(state="visible", timeout=60000)
                         panel_visible = True
                         logging.info(f"Property panel visible: {selector}")
                         break
@@ -1071,8 +1073,13 @@ async def do_sequence(args) -> Dict[str, Any]:
 
             # --- Measures tab ---
             try:
-                await page.locator("//div[contains(@class,'dataAdress_containertabs')]//button[4]").click()
-                await page.wait_for_load_state("networkidle")
+                # Try to click the tab by text (supports both English and French)
+                measures_tab = page.locator("//span[text()='Measures' or text()='Mesures']").first
+                await measures_tab.click()
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=80000)
+                except Exception:
+                    logging.info("Network did not go idle after clicking Measures tab, proceeding anyway.")
                 summary["active_text_measures"] = await get_all_text_active(page)
                 await page.wait_for_timeout(200)
                 await sc.shot_xpath_zoomfit(page, DATA_SECTION_XPATH, "measures_tab_zoom33", zoom=0.50)
@@ -1082,8 +1089,12 @@ async def do_sequence(args) -> Dict[str, Any]:
             # --- Avis tab ---
             set_step("avis")
             try:
-                await page.locator("//div[contains(@class,'dataAdress_containertabs')]//button[5]").click()
-                await page.wait_for_load_state("networkidle")
+                avis_tab = page.locator("//span[text()='Avis' or text()='Notices']").first
+                await avis_tab.click()
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=80000)
+                except Exception:
+                    logging.info("Network did not go idle after clicking Avis tab, proceeding anyway.")
                 summary["active_text_avis"] = await get_all_text_active(page)
                 risk_issues = await get_risk_issue_headings(page); summary["risk_issues"] = risk_issues
                 summary["Analyse risque"] = ", ".join(risk_issues)
@@ -1096,10 +1107,10 @@ async def do_sequence(args) -> Dict[str, Any]:
             # --- Comparables dialog ---
             try:
                 comp_trigger = page.locator(COMPARABLES_TRIGGER_XPATH).first
-                if await comp_trigger.is_visible(timeout=8000):
+                if await comp_trigger.is_visible(timeout=60000):
                     await comp_trigger.click()
-                    await page.wait_for_selector(COMPARABLES_DIALOG_CONTAINER_XPATH, timeout=20000)
-                    await page.wait_for_load_state("networkidle")
+                    await page.wait_for_load_state("networkidle", timeout=60000)
+                    await page.wait_for_selector(COMPARABLES_DIALOG_CONTAINER_XPATH, timeout=60000)
                     comp_dialog = page.locator(COMPARABLES_DIALOG_CONTENT_XPATH).first
                     summary["comparables_text"] = await get_text_from_locator(comp_dialog)
                 else:

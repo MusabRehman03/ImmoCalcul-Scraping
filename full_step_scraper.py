@@ -1107,16 +1107,29 @@ async def do_sequence(args) -> Dict[str, Any]:
             # --- Comparables dialog ---
             try:
                 comp_trigger = page.locator(COMPARABLES_TRIGGER_XPATH).first
+                logging.debug("Checking if comparables trigger is visible...")
                 if await comp_trigger.is_visible(timeout=60000):
+                    logging.debug("Comparables trigger is visible. Clicking...")
                     await comp_trigger.click()
-                    await page.wait_for_load_state("networkidle", timeout=60000)
-                    await page.wait_for_selector(COMPARABLES_DIALOG_CONTAINER_XPATH, timeout=60000)
-                    comp_dialog = page.locator(COMPARABLES_DIALOG_CONTENT_XPATH).first
-                    summary["comparables_text"] = await get_text_from_locator(comp_dialog)
+                    logging.debug("Clicked comparables trigger. Waiting for networkidle...")
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=60000)
+                        logging.debug("Network idle. Waiting for comparables dialog selector...")
+                    except Exception:
+                        logging.info("Network did not go idle after clicking comparables trigger, proceeding anyway.")
+                    try:
+                        await page.wait_for_selector(COMPARABLES_DIALOG_CONTAINER_XPATH, timeout=60000)
+                        logging.info("Comparables dialog selector found. Locating dialog content...")
+                        comp_dialog = page.locator(COMPARABLES_DIALOG_CONTENT_XPATH).first
+                        summary["comparables_text"] = await get_text_from_locator(comp_dialog)
+                        logging.info("Comparables dialog content extracted.")
+                        logging.deug(summary["comparables_text"])
+                    except Exception as e:
+                        logging.warning(f"Comparables dialog selector or content not found: {e}")
                 else:
                     logging.info("Comparables trigger not visible.")
             except Exception as e:
-                logging.warning(f"Comparables dialog capture failed: {e}")
+                logging.error(f"Comparables dialog capture failed: {e}", exc_info=True)
 
             # Maps flow
             try:

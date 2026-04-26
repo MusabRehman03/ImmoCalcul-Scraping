@@ -1123,7 +1123,7 @@ async def do_sequence(args) -> Dict[str, Any]:
                         comp_dialog = page.locator(COMPARABLES_DIALOG_CONTENT_XPATH).first
                         summary["comparables_text"] = await get_text_from_locator(comp_dialog)
                         logging.info("Comparables dialog content extracted.")
-                        logging.deug(summary["comparables_text"])
+                        logging.info(summary["comparables_text"])
                     except Exception as e:
                         logging.warning(f"Comparables dialog selector or content not found: {e}")
                 else:
@@ -1134,20 +1134,29 @@ async def do_sequence(args) -> Dict[str, Any]:
             # Maps flow
             try:
                 MAP_OPEN_XPATH = "//div//span[contains(., 'Voir sur la carte')]"
+                logging.info("[MAPS] Clicking 'Voir sur la carte' button...")
                 await page.locator(MAP_OPEN_XPATH).click()
-                logging.info("Waiting for map initialization...")
-                await page.wait_for_load_state("networkidle")
-                await asyncio.sleep(2) # Allow map tiles to render
+                logging.info("[MAPS] Waiting for map initialization (networkidle)...")
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=60000)
+                    logging.info("[MAPS] Network idle after map open.")
+                except Exception:
+                    logging.info("[MAPS] Network did not go idle after clicking map open, proceeding anyway.")
+                logging.info("[MAPS] Waiting 2 seconds for map tiles to render...")
+                await asyncio.sleep(2)
 
+                logging.info("[MAPS] Checking for 'Fermé' button to close popups...")
                 try:
                     ferme_button = page.get_by_label("Fermé")
                     for _ in range(2):
                         if await ferme_button.is_visible(timeout=2000):
+                            logging.info("[MAPS] 'Fermé' button visible, clicking to close popup.")
                             await ferme_button.click()
                             await asyncio.sleep(0.5)
                 except Exception:
-                    pass
+                    logging.info("[MAPS] No 'Fermé' button found or error closing popups.")
 
+                logging.info("[MAPS] Capturing zoom-fit screenshot of map area...")
                 await sc.shot_xpath_zoomfit(page, "//main[@id='main']/div[contains(@class,'map_blocvueSession__')]//div[contains(@class,'map_blocvueIntoSession__')]", "map_opened_zoom33", zoom=0.80)
                 canvas_loc = page.locator(MAP_CANVAS_XPATH).last
                 await canvas_loc.wait_for(timeout=10000)

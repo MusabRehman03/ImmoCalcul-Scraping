@@ -805,7 +805,7 @@ async def robust_autocomplete(page: Page, search_field: Locator, query: str):
     await search_field.type(query, delay=70)
 
     try:
-        await page.wait_for_load_state("networkidle", timeout=60000)
+        await page.wait_for_load_state("networkidle", timeout=30000)
     except PWTimeoutError:
         logging.debug("Network did not go idle after typing, proceeding anyway.")
 
@@ -973,7 +973,7 @@ async def do_sequence(args) -> Dict[str, Any]:
                 ]:
                     try:
                         el = page.locator(selector).first
-                        await el.wait_for(state="visible", timeout=60000)
+                        await el.wait_for(state="visible", timeout=30000)
                         panel_visible = True
                         logging.info(f"Property panel visible: {selector}")
                         break
@@ -1108,17 +1108,17 @@ async def do_sequence(args) -> Dict[str, Any]:
             try:
                 comp_trigger = page.locator(COMPARABLES_TRIGGER_XPATH).first
                 logging.debug("Checking if comparables trigger is visible...")
-                if await comp_trigger.is_visible(timeout=60000):
+                if await comp_trigger.is_visible(timeout=30000):
                     logging.debug("Comparables trigger is visible. Clicking...")
                     await comp_trigger.click()
                     logging.debug("Clicked comparables trigger. Waiting for networkidle...")
                     try:
-                        await page.wait_for_load_state("networkidle", timeout=60000)
+                        await page.wait_for_load_state("networkidle", timeout=30000)
                         logging.debug("Network idle. Waiting for comparables dialog selector...")
                     except Exception:
                         logging.info("Network did not go idle after clicking comparables trigger, proceeding anyway.")
                     try:
-                        await page.wait_for_selector(COMPARABLES_DIALOG_CONTAINER_XPATH, timeout=60000)
+                        await page.wait_for_selector(COMPARABLES_DIALOG_CONTAINER_XPATH, timeout=30000)
                         logging.info("Comparables dialog selector found. Locating dialog content...")
                         comp_dialog = page.locator(COMPARABLES_DIALOG_CONTENT_XPATH).first
                         summary["comparables_text"] = await get_text_from_locator(comp_dialog)
@@ -1138,7 +1138,7 @@ async def do_sequence(args) -> Dict[str, Any]:
                 await page.locator(MAP_OPEN_XPATH).click()
                 logging.info("[MAPS] Waiting for map initialization (networkidle)...")
                 try:
-                    await page.wait_for_load_state("networkidle", timeout=60000)
+                    await page.wait_for_load_state("networkidle", timeout=30000)
                     logging.info("[MAPS] Network idle after map open.")
                 except Exception:
                     logging.info("[MAPS] Network did not go idle after clicking map open, proceeding anyway.")
@@ -1186,24 +1186,47 @@ async def do_sequence(args) -> Dict[str, Any]:
                 logging.warning(f"Map flow failed: {e}")
 
             # --- Satellite toggle (best-effort) ---
-            try:
-                sat_btn = page.locator(SATELLITE_BTN_XPATH).first
-                if await sat_btn.is_visible(timeout=4000):
-                    await sat_btn.click()
-                    await page.wait_for_load_state("networkidle")
-            except Exception as e:
-                logging.warning(f"Satellite toggle failed: {e}")
+            # try:
+            #     sat_btn = page.locator(SATELLITE_BTN_XPATH).first
+            #     if await sat_btn.is_visible(timeout=4000):
+            #         await sat_btn.click()
+            #         await page.wait_for_load_state("networkidle")
+            # except Exception as e:
+            #     logging.warning(f"Satellite toggle failed: {e}")
 
-            # --- Map layers (best-effort; if map not visible, loop will quietly skip) ---
-            for idx, label in enumerate(MAP_ITEMS, start=1):
-                layer_loc = page.locator(MAP_LAYER_BASE_XPATH.format(idx)).first
+            # --- Map layers: open menu, click each layer by text, wait, screenshot, label ---
+            try:
+                logging.info("[MAP LAYER] Clicking 'Cartes' span to open map layers menu...")
+                cartes_span = page.locator("//span[text()='Cartes']").first
+                await cartes_span.click()
+                logging.info("[MAP LAYER] Clicked 'Cartes'. Waiting for networkidle (30s)...")
                 try:
-                    if await layer_loc.is_visible(timeout=5000):
-                        await layer_loc.click(force=True)
-                        await page.wait_for_load_state("networkidle", timeout=8000)
-                        await asyncio.sleep(1) # Final render wait
+                    await page.wait_for_load_state("networkidle", timeout=30000)
+                except Exception:
+                    logging.info("[MAP LAYER] Network did not go idle after clicking 'Cartes', proceeding anyway.")
+
+                # Find all .map_round__ul_PQ divs and iterate over all found
+                all_layer_divs = await page.locator("//div[contains(@class,'map_round__ul_PQ')]").all()
+                total_divs = len(all_layer_divs)
+                if total_divs == 0:
+                    logging.error("[MAP LAYER] No .map_round__ul_PQ divs found! Aborting map layers flow.")
+                for idx, layer_div in enumerate(all_layer_divs):
+                    label = MAP_ITEMS[idx] if idx < len(MAP_ITEMS) else f"Layer {idx}"
+                    try:
+                        logging.info(f"[MAP LAYER] Processing layer {idx}: {label}")
+                        await layer_div.wait_for(state="visible", timeout=5000)
+                        logging.info(f"[MAP LAYER] Clicking .map_round__ul_PQ div index {idx} for layer {idx}: {label}")
+                        await layer_div.click()
+                        logging.info(f"[MAP LAYER] Clicked layer {idx}. Waiting for networkidle (30s)...")
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=30000)
+                        except Exception:
+                            logging.info(f"[MAP LAYER] Network did not go idle after clicking layer {idx}, proceeding anyway.")
+                        logging.info(f"[MAP LAYER] Waiting 10 seconds for map layer {idx} to fully load...")
+                        await asyncio.sleep(10)
 
                         canvas_loc = page.locator(MAP_CANVAS_XPATH).last
+                        logging.info(f"[MAP LAYER] Waiting for canvas for layer {idx}...")
                         await canvas_loc.wait_for(timeout=6000)
 
                         overlay_xpaths = [
@@ -1213,18 +1236,24 @@ async def do_sequence(args) -> Dict[str, Any]:
                             "//div[contains(@class,'map_mapAlert')]/div",
                             "//div[contains(@class,'noprint')]/div[contains(@class,'map_mapcontrolOptionSession')]"
                         ]
+                        logging.info(f"[MAP LAYER] Hiding overlays for layer {idx}...")
                         await page.evaluate(f"xpaths => {{ for (const xpath of xpaths) {{ const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < result.snapshotLength; i++) {{ result.snapshotItem(i).style.display = 'none'; }} }} }}", overlay_xpaths)
 
                         img_path = out_dir / f"map_canvas_{idx:02d}_{label.replace(' ','_')}.png"
+                        logging.info(f"[MAP LAYER] Taking screenshot for layer {idx}: {img_path}")
                         await canvas_loc.screenshot(path=str(img_path))
 
-                        # Restore overlays
+                        logging.info(f"[MAP LAYER] Restoring overlays for layer {idx}...")
                         await page.evaluate(f"xpaths => {{ for (const xpath of xpaths) {{ const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < result.snapshotLength; i++) {{ result.snapshotItem(i).style.display = ''; }} }} }}", overlay_xpaths)
 
+                        logging.info(f"[MAP LAYER] Adding overlay label for layer {idx}...")
                         overlay_label(img_path, label)
                         summary["map_layers"].append({"index": idx, "label": label, "file": str(img_path)})
-                except Exception as e:
-                    logging.error(f"Failed to capture layer {idx} ({label}): {e}")
+                        logging.info(f"[MAP LAYER] Finished layer {idx}: {label}")
+                    except Exception as e:
+                        logging.error(f"Failed to capture layer {idx} ({label}): {e}")
+            except Exception as e:
+                logging.error(f"[MAP LAYER] Failed to open or process map layers menu: {e}")
 
             # --- Outputs ---
             pdf_path = write_pdf_from_screenshots(out_dir, summary)
@@ -1368,8 +1397,8 @@ def main():
         PARENT_FOLDER_ID = args.parent_folder_id
 
     if not PARENT_FOLDER_ID:
-        PARENT_FOLDER_ID = "1AubnRZyvIBTiWwjiG0UAXsHyKE4wqw47"  # Default to a known folder for testing, but should be overridden in production
-        logging.warning(f"PARENT_DRIVE_FOLDER_ID was not set. now set to {PARENT_FOLDER_ID}.")
+        # PARENT_FOLDER_ID = "1AubnRZyvIBTiWwjiG0UAXsHyKE4wqw47"  # Default to a known folder for testing, but should be overridden in production
+        logging.warning("PARENT_DRIVE_FOLDER_ID is not set. Google Drive upload will be skipped.")
         
 
     if args.fixed_delay is not None and args.fixed_delay < 0:

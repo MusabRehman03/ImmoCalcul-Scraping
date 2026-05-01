@@ -30,4 +30,4 @@ docker run -it \
   -e PROXY_USER="${PROXY_USER}" \
   -e PROXY_PASS="${PROXY_PASS}" \
   -e DISPLAY=:99 \
-  immocalcul-scraper -c "Xvfb :99 -screen 0 1366x768x24 > /dev/null 2>&1 & sleep 2 && python3 /app/full_step_scraper.py $*"
+  immocalcul-scraper -c "Xvfb :99 -screen 0 1366x768x24 > /dev/null 2>&1 & sleep 2 && python3 /app/sheet_processor.py $*"

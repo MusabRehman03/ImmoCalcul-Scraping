@@ -32,6 +32,8 @@ class SheetRow(BaseModel):
     street: str = ""
     city: str = ""
     postal_code: str = ""
+    other_unit: str = ""
+    immocalcul_status: str = ""
     analyse_risque: str = ""
     picture_1: str = ""
     drive_folder_url: str = ""
@@ -145,6 +147,8 @@ def parse_row(row: List, row_index: int) -> Optional[SheetRow]:
             street=get_cell_value(row, Config.COL_STREET),
             city=get_cell_value(row, Config.COL_CITY),
             postal_code=get_cell_value(row, Config.COL_POSTAL_CODE),
+            other_unit=get_cell_value(row, Config.COL_OTHER_UNIT),
+            immocalcul_status=get_cell_value(row, Config.COL_IMMOCALCUL),
             analyse_risque=get_cell_value(row, Config.COL_ANALYSE_RISQUE),
             picture_1=get_cell_value(row, Config.COL_PICTURE_1),
             drive_folder_url=get_cell_value(row, Config.COL_DRIVE_FOLDER)
@@ -171,6 +175,13 @@ def get_rows_to_process(worksheet) -> List[SheetRow]:
             
             if sheet_row:
                 # Filter: drive_folder_url present AND picture_1 is empty
+                if sheet_row.immocalcul_status:
+                    if Config.VERBOSE_LOGGING:
+                        logging.info(
+                            f"Row {i} skipped - Immocalcul already set ({sheet_row.immocalcul_status})"
+                        )
+                    continue
+
                 if sheet_row.drive_folder_url and not sheet_row.picture_1:
                     rows_to_process.append(sheet_row)
                     
@@ -322,6 +333,20 @@ async def run_scraper_async(row: SheetRow, worksheet, attempt: int = 1) -> Proce
     Updates the Google Sheet immediately upon completion with ALL fields.
     """
     try:
+        if row.other_unit:
+            logging.info(
+                f"   ⏭️ Skipping row {row.row_index} (Ref: {row.reference_number}) - Other Unit present"
+            )
+            updates = {Config.COL_IMMOCALCUL: 2}
+            updated_count = update_multiple_cells(worksheet, row.row_index, updates)
+            return ProcessingResult(
+                row_index=row.row_index,
+                reference=row.reference_number,
+                status="skipped",
+                attempts=attempt,
+                updated_cells=updated_count
+            )
+
         if Config.VERBOSE_LOGGING:
             logging.info(
                 f"[Attempt {attempt}] Starting scraper for row {row.row_index} "
@@ -429,6 +454,7 @@ async def run_scraper_async(row: SheetRow, worksheet, attempt: int = 1) -> Proce
         
         # Extract all updates from summary (including normalized risk_issues)
         updates = extract_updates_from_summary(summary)
+        updates[Config.COL_IMMOCALCUL] = 1
         
         # Try to extract Picture 1 from uploaded_files if not in updates
         if Config.COL_PICTURE_1 not in updates and 'uploaded_files' in summary:
@@ -498,6 +524,14 @@ async def process_row_with_retry(row: SheetRow, worksheet, semaphore: asyncio.Se
                 )
                 await asyncio.sleep(Config.RETRY_DELAY)
         
+        if result.status != "success":
+            updated_count = update_multiple_cells(
+                worksheet,
+                row.row_index,
+                {Config.COL_IMMOCALCUL: 0}
+            )
+            result.updated_cells = updated_count
+
         return result
 
 async def process_all_sheet_rows(job_id: str):
@@ -505,38 +539,66 @@ async def process_all_sheet_rows(job_id: str):
     Main async function to process all eligible rows from Google Sheet.
     Updates the sheet immediately after each row is processed with ALL fields.
     """
+
     start_time = datetime.utcnow()
-    
+
+    # --- EARLY DEBUG PRINTS (before logging setup) ---
+    print("[EARLY-DEBUG] Entered process_all_sheet_rows")
+    print(f"[EARLY-DEBUG] Job ID: {job_id}")
     try:
+        print("[EARLY-DEBUG] About to validate config...")
+        print(f"[EARLY-DEBUG] SPREADSHEET_ID: {Config.SPREADSHEET_ID}")
+        print(f"[EARLY-DEBUG] WORKSHEET_GID: {Config.WORKSHEET_GID}")
+        print(f"[EARLY-DEBUG] GOOGLE_CREDENTIALS_FILE exists: {Config.GOOGLE_CREDENTIALS_FILE.exists()}")
+        print(f"[EARLY-DEBUG] token.json exists: {Path('token.json').exists()}")
+
+        # Validate configuration
+        if not Config.validate():
+            print("[EARLY-DEBUG] Config validation failed!")
+            raise RuntimeError("Configuration validation failed. Check logs.")
+
+        print("[EARLY-DEBUG] Config validated. Authenticating with Google Sheets...")
+        client = get_google_sheets_client()
+        spreadsheet = client.open_by_key(Config.SPREADSHEET_ID)
+
+        # Get the worksheet
+        worksheet = None
+        for ws in spreadsheet.worksheets():
+            print(f"[EARLY-DEBUG] Worksheet candidate: id={ws.id}, title={ws.title}")
+            if str(ws.id) == Config.WORKSHEET_GID:
+                worksheet = ws
+                break
+
+        if not worksheet:
+            worksheet = spreadsheet.get_worksheet(0)
+            print(f"[EARLY-DEBUG] Defaulted to first worksheet: id={worksheet.id}, title={worksheet.title}")
+        else:
+            print(f"[EARLY-DEBUG] Selected worksheet: id={worksheet.id}, title={worksheet.title}")
+
+        all_values = worksheet.get_all_values()
+        print(f"[EARLY-DEBUG] Sheet has {len(all_values)} rows (including header)")
+        if all_values:
+            print(f"[EARLY-DEBUG] Sheet header: {all_values[0]}")
+            for i, row in enumerate(all_values[1:4], start=2):
+                print(f"[EARLY-DEBUG] Row {i}: {row}")
+        else:
+            print("[EARLY-DEBUG] No data found in worksheet (all_values is empty)")
+
+        # --- END EARLY DEBUG PRINTS ---
+
+        logging.info("STARTED SHEET PROCESSOR - Entered process_all_sheet_rows")
         set_step("start")
         logging.info(f"{'='*60}")
         logging.info(f"Job {job_id}: Starting batch processing")
         logging.info(f"Started at: {start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
         logging.info(f"{'='*60}")
-        
+
         Config.log_config()
-        
-        # Validate configuration
-        if not Config.validate():
-            raise RuntimeError("Configuration validation failed. Check logs.")
-        
-        # Initialize Google Sheets client
-        logging.info("Authenticating with Google Sheets using OAuth credentials...")
-        client = get_google_sheets_client()
-        spreadsheet = client.open_by_key(Config.SPREADSHEET_ID)
-        
-        # Get the worksheet
-        worksheet = None
-        for ws in spreadsheet.worksheets():
-            if str(ws.id) == Config.WORKSHEET_GID:
-                worksheet = ws
-                break
-        
-        if not worksheet:
-            worksheet = spreadsheet.get_worksheet(0)
-        
-        logging.info(f"✓ Using worksheet: '{worksheet.title}'")
-        
+
+        # Get rows to process
+        rows_to_process = get_rows_to_process(worksheet)
+        # ...existing code...
+
         # Get rows to process
         rows_to_process = get_rows_to_process(worksheet)
         
@@ -604,7 +666,15 @@ async def process_all_sheet_rows(job_id: str):
         logging.info(f"{'='*60}\n")
     
     except Exception as e:
+        import traceback
         set_step("error")
-        error_message = f"Batch processing failed: {e}"
-        logging.error(f"Job {job_id}: {error_message}", exc_info=True)
+        error_message = f"Batch processing failed: {e}\n{traceback.format_exc()}"
+        logging.error(f"Job {job_id}: {error_message}")
         raise
+
+
+if __name__ == "__main__":
+    import sys
+    job_id = sys.argv[1] if len(sys.argv) > 1 else "manual-test"
+    import asyncio
+    asyncio.run(process_all_sheet_rows(job_id))

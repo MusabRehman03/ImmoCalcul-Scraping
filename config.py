@@ -18,7 +18,8 @@ class Config:
     PORT: int = int(os.getenv("PORT", "8080"))
     
     # Google Sheets Settings
-    SPREADSHEET_ID: str = os.getenv("SPREADSHEET_ID", "10izV_Hjs8rjbJxDjvzTnU_7afnt2ZhK4HRRA81Hq8is")
+    # SPREADSHEET_ID: str = os.getenv("SPREADSHEET_ID", "10izV_Hjs8rjbJxDjvzTnU_7afnt2ZhK4HRRA81Hq8is")
+    SPREADSHEET_ID: str = os.getenv("SPREADSHEET_ID", "1KQ_1RA8Pi1d8d9oQm_s11uhAi8vg37MFTpcPi5PFDcM")
     WORKSHEET_GID: str = os.getenv("WORKSHEET_GID", "1850964650")
     
     # OAuth credentials files
@@ -34,7 +35,7 @@ class Config:
     
     # Scraper Settings
     SCRAPER_SCRIPT: str = os.getenv("SCRAPER_SCRIPT", "full_step_scraper.py")
-    SCRAPER_TIMEOUT: int = int(os.getenv("SCRAPER_TIMEOUT", "900"))  # 15 minutes
+    SCRAPER_TIMEOUT: int = int(os.getenv("SCRAPER_TIMEOUT", "3600"))  # 60 minutes
     MAX_CONCURRENT_SCRAPERS: int = int(os.getenv("MAX_CONCURRENT_SCRAPERS", "3"))
     HEADLESS: bool = os.getenv("HEADLESS", "False").lower() in ('true', '1', 'yes')
     CLASSIFICATION_STYLE: str = os.getenv("CLASSIFICATION_STYLE", "spec")
@@ -182,6 +183,7 @@ class Config:
     COL_CALL: int = 59                  # Column BH
     COL_DATE_CALL: int = 60             # Column BI
     COL_REPONSE: int = 61               # Column BJ
+    COL_IMMOCALCUL: int = 63            # Column BL - ImmoCalcul
     
     # Retry Settings
     MAX_RETRIES_PER_ROW: int = int(os.getenv("MAX_RETRIES_PER_ROW", "2"))

@@ -40,28 +40,42 @@ app.add_middleware(
 # Track active jobs (in-memory; use Redis for production)
 active_jobs = {}
 
+import subprocess
+
 def run_async_job(job_id: str):
-    """Wrapper to run async function in background"""
+    """Run the batch processor inside a Docker container in the background."""
     try:
         active_jobs[job_id] = {
             "status": "running",
             "started_at": datetime.utcnow().isoformat()
         }
-        
-        # Run the async processor
-        asyncio.run(process_all_sheet_rows(job_id))
-        
-        active_jobs[job_id]["status"] = "completed"
-        active_jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
-        
-        logging.info(f"✓ Job {job_id} completed successfully")
-        
+
+        # Build the docker run command
+        docker_cmd = [
+            "docker", "run", "--rm",
+            "-v", f"{os.getcwd()}/run_steps:/app/run_steps",
+            "immocalcul-scraper",
+            "python3", "app.py", "--job-id", job_id
+        ]
+
+        logging.info(f"[DOCKER] Launching: {' '.join(docker_cmd)}")
+        result = subprocess.run(docker_cmd, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            active_jobs[job_id]["status"] = "completed"
+            active_jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
+            logging.info(f"✓ Job {job_id} completed successfully (Docker)")
+        else:
+            active_jobs[job_id]["status"] = "failed"
+            active_jobs[job_id]["error"] = result.stderr
+            active_jobs[job_id]["failed_at"] = datetime.utcnow().isoformat()
+            logging.error(f"✗ Job {job_id} failed in Docker: {result.stderr}")
+
     except Exception as e:
         active_jobs[job_id]["status"] = "failed"
         active_jobs[job_id]["error"] = str(e)
         active_jobs[job_id]["failed_at"] = datetime.utcnow().isoformat()
-        
-        logging.error(f"✗ Job {job_id} failed: {e}", exc_info=True)
+        logging.error(f"✗ Job {job_id} failed to launch Docker: {e}", exc_info=True)
 
 @app.get("/immocalcul/run")
 async def run_endpoint(request: Request, background_tasks: BackgroundTasks):

@@ -14,7 +14,7 @@ export DISPLAY=:99
 # Run the scraper with provided arguments
 echo "Starting ImmoCalcul scraper with virtual display..."
 cd /app
-python3 full_step_scraper.py "$@"
+python3 sheet_processor.py "$@"
 
 # Capture exit code
 EXIT_CODE=$?

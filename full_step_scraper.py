@@ -726,9 +726,10 @@ async def create_context(pw, args, out_dir: Path):
         f"--window-size={args.viewport_width},{args.viewport_height}",
     ]
     
-    # Use a dedicated automation profile
-    automation_profile = os.path.expanduser("Chromium_Automation")
-    
+
+    # Use a unique temp profile for each run (prevents profile locking in parallel runs)
+    import tempfile
+    automation_profile = tempfile.mkdtemp(prefix="chrome-profile-")
     logging.info(f"Using Chromium automation profile: {automation_profile}")
     logging.info("Using Playwright's bundled Chromium browser.")
     

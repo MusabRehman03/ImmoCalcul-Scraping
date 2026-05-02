@@ -1228,7 +1228,7 @@ async def do_sequence(args) -> Dict[str, Any]:
 
                         canvas_loc = page.locator(MAP_CANVAS_XPATH).last
                         logging.info(f"[MAP LAYER] Waiting for canvas for layer {idx}...")
-                        await canvas_loc.wait_for(timeout=6000)
+                        await canvas_loc.wait_for(timeout=20000)
 
                         overlay_xpaths = [
                             "//div[contains(@class,'map_cardResultMap')]",

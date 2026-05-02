@@ -65,3 +65,26 @@ log_context = setup_logging()
 def set_step(step_name: str):
     """Updates the current logging step."""
     log_context['step'] = step_name
+
+def add_run_log_handler(run_label: str) -> Path:
+    """Attach a per-run log file handler and return its path."""
+    safe_label = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in run_label)
+    log_path = LOG_DIR / f"sc-immocalcul-{safe_label}.log"
+
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if isinstance(handler, logging.FileHandler) and Path(handler.baseFilename) == log_path:
+            return log_path
+
+    log_format = '[%(asctime)s] LEVEL=%(levelname)s step=%(step)s msg="%(message)s"'
+    formatter = logging.Formatter(log_format, datefmt='%Y-%m-%d %H:%M:%S')
+
+    run_handler = logging.handlers.RotatingFileHandler(
+        log_path,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5
+    )
+    run_handler.setFormatter(formatter)
+    run_handler.setLevel(logging.INFO)
+    root_logger.addHandler(run_handler)
+    return log_path

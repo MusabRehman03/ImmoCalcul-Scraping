@@ -5,6 +5,7 @@ Updates Google Sheet immediately after each row is processed
 import os
 import json
 import subprocess
+import shutil
 import logging
 import asyncio
 import re
@@ -18,7 +19,7 @@ from google.auth.transport.requests import Request
 from pydantic import BaseModel
 
 from config import Config
-from logger_config import set_step
+from logger_config import set_step, add_run_log_handler
 
 class SheetRow(BaseModel):
     """Model for a sheet row"""
@@ -176,10 +177,9 @@ def get_rows_to_process(worksheet) -> List[SheetRow]:
             if sheet_row:
                 # Filter: drive_folder_url present AND picture_1 is empty
                 if sheet_row.immocalcul_status:
-                    if Config.VERBOSE_LOGGING:
-                        logging.info(
-                            f"Row {i} skipped - Immocalcul already set ({sheet_row.immocalcul_status})"
-                        )
+                    logging.info(
+                        f"Row {i} skipped - Immocalcul already set ({sheet_row.immocalcul_status})"
+                    )
                     continue
 
                 if sheet_row.drive_folder_url and not sheet_row.picture_1:
@@ -326,6 +326,26 @@ def update_multiple_cells(worksheet, row_idx: int, updates: Dict[int, any]) -> i
             logging.warning(f"   ⚠️ Failed to update {col_letter}{row_idx}, continuing...")
     
     return updated_count
+
+def cleanup_run_artifacts(summary_path: Path) -> None:
+    """Remove scraper output directory after processing is complete."""
+    if not summary_path:
+        return
+
+    try:
+        out_dir = summary_path.parent
+        run_steps_dir = Path("run_steps").resolve()
+        out_dir_resolved = out_dir.resolve()
+
+        if not str(out_dir_resolved).startswith(str(run_steps_dir) + os.sep):
+            logging.warning(f"Skipping cleanup for unexpected path: {out_dir_resolved}")
+            return
+
+        if out_dir.exists():
+            shutil.rmtree(out_dir, ignore_errors=True)
+            logging.info(f"   🧹 Cleaned up artifacts in {out_dir}")
+    except Exception as e:
+        logging.warning(f"   ⚠️ Cleanup failed for {summary_path}: {e}")
 
 async def run_scraper_async(row: SheetRow, worksheet, attempt: int = 1) -> ProcessingResult:
     """
@@ -477,6 +497,7 @@ async def run_scraper_async(row: SheetRow, worksheet, attempt: int = 1) -> Proce
         updated_count = update_multiple_cells(worksheet, row.row_index, updates)
         
         logging.info(f"   ✅ Successfully updated {updated_count}/{len(updates)} cells in sheet")
+        cleanup_run_artifacts(summary_path)
         logging.info(f"✅ Row {row.row_index} completed successfully")
         
         return ProcessingResult(
@@ -509,6 +530,10 @@ async def process_row_with_retry(row: SheetRow, worksheet, semaphore: asyncio.Se
         logging.info(f"Processing Row {row_number}/{total_rows}")
         logging.info(f"Sheet Row Index: {row.row_index}")
         logging.info(f"Reference: {row.reference_number}")
+        if row.cadastral_lot:
+            logging.info(f"Lot: {row.cadastral_lot}")
+        elif row.street_number or row.street or row.city:
+            logging.info(f"Address: {row.street_number} {row.street}, {row.city}")
         logging.info(f"{'='*60}")
         
         for attempt in range(1, Config.MAX_RETRIES_PER_ROW + 1):
@@ -531,6 +556,13 @@ async def process_row_with_retry(row: SheetRow, worksheet, semaphore: asyncio.Se
                 {Config.COL_IMMOCALCUL: 0}
             )
             result.updated_cells = updated_count
+            if result.error:
+                match = re.search(r"Summary file not found: (.+)$", result.error)
+                if match:
+                    try:
+                        cleanup_run_artifacts(Path(match.group(1).strip()))
+                    except Exception:
+                        pass
 
         return result
 
@@ -586,6 +618,9 @@ async def process_all_sheet_rows(job_id: str):
 
         # --- END EARLY DEBUG PRINTS ---
 
+        run_label = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        run_log_path = add_run_log_handler(run_label)
+        logging.info(f"Run log: {run_log_path}")
         logging.info("STARTED SHEET PROCESSOR - Entered process_all_sheet_rows")
         set_step("start")
         logging.info(f"{'='*60}")
@@ -594,10 +629,6 @@ async def process_all_sheet_rows(job_id: str):
         logging.info(f"{'='*60}")
 
         Config.log_config()
-
-        # Get rows to process
-        rows_to_process = get_rows_to_process(worksheet)
-        # ...existing code...
 
         # Get rows to process
         rows_to_process = get_rows_to_process(worksheet)

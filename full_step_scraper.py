@@ -37,6 +37,56 @@ from PIL import Image, ImageDraw, ImageFont
 import img2pdf
 from docx import Document
 
+# --- Lossless image compression utilities ---
+def compress_image_lossless(img_path: Path) -> bool:
+    """
+    Compress an image losslessly using optipng/jpegoptim if available, fallback to Pillow for PNG.
+    Returns True if compression succeeded, False otherwise.
+    """
+    import shutil
+    ext = img_path.suffix.lower()
+    orig_size = img_path.stat().st_size if img_path.exists() else 0
+    try:
+        if ext == ".png":
+            # Try optipng
+            if shutil.which("optipng"):
+                result = subprocess.run(["optipng", "-o2", str(img_path)], capture_output=True)
+                if result.returncode == 0:
+                    logging.info(f"[IMG-OPT] optipng compressed {img_path.name}: {orig_size} -> {img_path.stat().st_size} bytes")
+                    return True
+                else:
+                    logging.warning(f"[IMG-OPT] optipng failed: {result.stderr.decode(errors='ignore')}")
+            # Fallback: Pillow re-save (not always lossless)
+            try:
+                img = Image.open(img_path)
+                img.save(img_path, optimize=True)
+                logging.info(f"[IMG-OPT] Pillow re-save for PNG {img_path.name}: {orig_size} -> {img_path.stat().st_size} bytes")
+                return True
+            except Exception as e:
+                logging.warning(f"[IMG-OPT] Pillow fallback failed for {img_path.name}: {e}")
+        elif ext in (".jpg", ".jpeg"):
+            # Try jpegoptim
+            if shutil.which("jpegoptim"):
+                result = subprocess.run(["jpegoptim", "--strip-all", "--all-progressive", str(img_path)], capture_output=True)
+                if result.returncode == 0:
+                    logging.info(f"[IMG-OPT] jpegoptim compressed {img_path.name}: {orig_size} -> {img_path.stat().st_size} bytes")
+                    return True
+                else:
+                    logging.warning(f"[IMG-OPT] jpegoptim failed: {result.stderr.decode(errors='ignore')}")
+            # Fallback: Pillow re-save (not always lossless)
+            try:
+                img = Image.open(img_path)
+                img.save(img_path, quality=95, optimize=True, progressive=True)
+                logging.info(f"[IMG-OPT] Pillow re-save for JPEG {img_path.name}: {orig_size} -> {img_path.stat().st_size} bytes")
+                return True
+            except Exception as e:
+                logging.warning(f"[IMG-OPT] Pillow fallback failed for {img_path.name}: {e}")
+        else:
+            logging.info(f"[IMG-OPT] Skipping non-PNG/JPEG file: {img_path.name}")
+    except Exception as e:
+        logging.error(f"[IMG-OPT] Compression failed for {img_path.name}: {e}")
+    return False
+
 # --- Import and setup logging (expected to exist in your project) ---
 from logger_config import set_step
 from logger_config import setup_logging  # used in __main__
@@ -520,6 +570,7 @@ def write_pdf_from_screenshots(out_dir: Path, summary: dict) -> Optional[Path]:
     all_imgs: List[Path] = []
     seen = set()
 
+
     # Collect numbered screenshots
     for i in range(1, 300):
         for p in sorted(out_dir.glob(f"{i:02d}_*.png")):
@@ -533,6 +584,11 @@ def write_pdf_from_screenshots(out_dir: Path, summary: dict) -> Optional[Path]:
         if p.exists() and p not in seen:
             all_imgs.append(p)
             seen.add(p)
+
+    # --- Lossless compress all images except NO_COMPRESS_PATTERNS ---
+    for img_path in all_imgs:
+        if img_path.name not in NO_COMPRESS_PATTERNS:
+            compress_image_lossless(img_path)
 
     if not all_imgs:
         logging.info("No screenshots found to build PDF.")

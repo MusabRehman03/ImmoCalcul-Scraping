@@ -1,3 +1,21 @@
+## Image Compression (Lossless, VPS & Simple Mode)
+
+This project uses **lossless image compression** for screenshots and exported images:
+
+- **PNG:** [optipng](http://optipng.sourceforge.net/) (lossless, open source)
+- **JPEG:** [jpegoptim](https://github.com/tjko/jpegoptim) (lossless, open source)
+
+These tools are installed automatically in the Docker image. If you run outside Docker (simple mode), install them on your VPS for best results:
+
+```bash
+sudo apt-get install optipng jpegoptim
+# or
+brew install optipng jpegoptim
+```
+
+If these tools are not available, the script will fallback to Pillow for basic optimization (not always lossless).
+
+Compression is applied automatically after screenshots are saved and before PDF creation. Logs will show before/after file sizes.
 # Docker Setup for ImmoCalcul Scraper
 
 This Docker setup allows you to test the scraper in a Linux environment with virtual display support, simulating a VPS deployment.

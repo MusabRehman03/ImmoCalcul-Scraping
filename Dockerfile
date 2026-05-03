@@ -24,6 +24,8 @@ RUN apt-get update && apt-get install -y \
     libxfixes3 \
     libx11-6 \
     libxcb1 \
+    optipng \
+    jpegoptim \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory

@@ -125,7 +125,7 @@ COMPARABLES_DIALOG_PAPER_XPATH = (
 
 SATELLITE_BTN_XPATH = "//div[contains(@class,'map_customMapControls')]//div[contains(@class,'map_customSatelliteBtn')][1]//span"
 MAP_LAYER_BASE_XPATH = "((//div[contains(@class,'map_containerSwitchMapLayer')])[2]//div[contains(@class,'map_blocLayerImage')])[{}]"
-MAP_CANVAS_XPATH = "//div[contains(@class,'ol-layer')]//canvas"
+MAP_CANVAS_XPATH = "//div[contains(@class,'maplibregl-canvas-container')]//canvas[contains(@class,'maplibregl-canvas')]"
 
 
 def get_drive_service():
@@ -1159,10 +1159,10 @@ async def do_sequence(args) -> Dict[str, Any]:
 
                 logging.info("[MAPS] Capturing zoom-fit screenshot of map area...")
                 await sc.shot_xpath_zoomfit(page, "//main[@id='main']/div[contains(@class,'map_blocvueSession__')]//div[contains(@class,'map_blocvueIntoSession__')]", "map_opened_zoom33", zoom=0.80)
-                canvas_loc = page.locator(MAP_CANVAS_XPATH).last
+                canvas_loc = page.locator("//div[contains(@class,'maplibregl-canvas-container')]//canvas[contains(@class,'maplibregl-canvas')]").last
                 await canvas_loc.wait_for(timeout=10000)
-                # Wait for canvas to be properly rendered
-                await page.wait_for_function("() => document.querySelector('canvas')?.getContext('2d')")
+                # Wait for canvas to be properly rendered (maplibre canvas)
+                await page.wait_for_function("() => document.querySelector('.maplibregl-canvas-container canvas.maplibregl-canvas')?.getContext('2d')")
 
 
                 # Hide overlays before canvas capture
@@ -1209,10 +1209,29 @@ async def do_sequence(args) -> Dict[str, Any]:
                 # Find all .map_round__ul_PQ divs and iterate over all found
                 all_layer_divs = await page.locator("//div[contains(@class,'map_round__ul_PQ')]").all()
                 total_divs = len(all_layer_divs)
+                logging.info(f"[MAP LAYER] Found {total_divs} layer divs")
                 if total_divs == 0:
                     logging.error("[MAP LAYER] No .map_round__ul_PQ divs found! Aborting map layers flow.")
+
+                # Extract layer labels rendered under each layer (span with class like map_textoptionlayer__...)
+                try:
+                    layer_label_locator = page.locator("//span[contains(@class,'map_textoptionlayer')]")
+                    layer_labels_raw = await layer_label_locator.all_text_contents()
+                    # Skip the first 3 entries (headings, not layer names)
+                    layer_labels = layer_labels_raw[3:] if len(layer_labels_raw) > 3 else []
+                    logging.info(f"[MAP LAYER] Extracted {len(layer_labels)} layer labels (skipped first 3): {layer_labels}")
+                except Exception as e:
+                    logging.warning(f"[MAP LAYER] Failed to extract layer labels: {e}")
+                    layer_labels = []
+
+                # Persist labels for diagnostics
+                summary['map_layer_labels'] = layer_labels
+
                 for idx, layer_div in enumerate(all_layer_divs):
-                    label = MAP_ITEMS[idx] if idx < len(MAP_ITEMS) else f"Layer {idx}"
+                    if idx < len(layer_labels) and layer_labels[idx].strip():
+                        label = layer_labels[idx].strip()
+                    else:
+                        label = MAP_ITEMS[idx] if idx < len(MAP_ITEMS) else f"Layer {idx}"
                     try:
                         logging.info(f"[MAP LAYER] Processing layer {idx}: {label}")
                         await layer_div.wait_for(state="visible", timeout=5000)
@@ -1229,6 +1248,11 @@ async def do_sequence(args) -> Dict[str, Any]:
                         canvas_loc = page.locator(MAP_CANVAS_XPATH).last
                         logging.info(f"[MAP LAYER] Waiting for canvas for layer {idx}...")
                         await canvas_loc.wait_for(timeout=20000)
+                        # Also ensure the specific MapLibre canvas context exists
+                        try:
+                            await page.wait_for_function("() => document.querySelector('.maplibregl-canvas-container canvas.maplibregl-canvas')?.getContext('2d')", timeout=15000)
+                        except Exception:
+                            logging.info(f"[MAP LAYER] MapLibre canvas 2D context not yet available for layer {idx}, proceeding with caution.")
 
                         overlay_xpaths = [
                             "//div[contains(@class,'map_cardResultMap')]",
@@ -1238,14 +1262,31 @@ async def do_sequence(args) -> Dict[str, Any]:
                             "//div[contains(@class,'noprint')]/div[contains(@class,'map_mapcontrolOptionSession')]"
                         ]
                         logging.info(f"[MAP LAYER] Hiding overlays for layer {idx}...")
-                        await page.evaluate(f"xpaths => {{ for (const xpath of xpaths) {{ const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < result.snapshotLength; i++) {{ result.snapshotItem(i).style.display = 'none'; }} }} }}", overlay_xpaths)
+                        for xpath in overlay_xpaths:
+                            logging.info(f"[MAP LAYER] Searching for overlay: {xpath}")
+                            count = await page.evaluate(f"xpath => document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null).snapshotLength", xpath)
+                            logging.info(f"[MAP LAYER] Found {count} elements for overlay: {xpath}")
+                            if count > 0:
+                                logging.info(f"[MAP LAYER] Hiding {count} elements for overlay: {xpath}")
+                                await page.evaluate(f"xpath => {{ const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < result.snapshotLength; i++) {{ result.snapshotItem(i).style.display = 'none'; }} }}", xpath)
+                                logging.info(f"[MAP LAYER] Overlay hidden for: {xpath}")
+                            else:
+                                logging.info(f"[MAP LAYER] No elements found to hide for overlay: {xpath}")
 
                         img_path = out_dir / f"map_canvas_{idx:02d}_{label.replace(' ','_')}.png"
                         logging.info(f"[MAP LAYER] Taking screenshot for layer {idx}: {img_path}")
                         await canvas_loc.screenshot(path=str(img_path))
 
                         logging.info(f"[MAP LAYER] Restoring overlays for layer {idx}...")
-                        await page.evaluate(f"xpaths => {{ for (const xpath of xpaths) {{ const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < result.snapshotLength; i++) {{ result.snapshotItem(i).style.display = ''; }} }} }}", overlay_xpaths)
+                        for xpath in overlay_xpaths:
+                            count = await page.evaluate(f"xpath => document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null).snapshotLength", xpath)
+                            logging.info(f"[MAP LAYER] Found {count} elements for overlay: {xpath} (restore phase)")
+                            if count > 0:
+                                logging.info(f"[MAP LAYER] Restoring {count} elements for overlay: {xpath}")
+                                await page.evaluate(f"xpath => {{ const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < result.snapshotLength; i++) {{ result.snapshotItem(i).style.display = ''; }} }}", xpath)
+                                logging.info(f"[MAP LAYER] Overlay restored for: {xpath}")
+                            else:
+                                logging.info(f"[MAP LAYER] No elements found to restore for overlay: {xpath}")
 
                         logging.info(f"[MAP LAYER] Adding overlay label for layer {idx}...")
                         overlay_label(img_path, label)
@@ -1421,3 +1462,4 @@ def main():
 if __name__ == "__main__":
     main()
 
+#<span class="map_textoptionlayer__TdPgr" style="color: rgb(43, 187, 152);">Zonage municipal</span>

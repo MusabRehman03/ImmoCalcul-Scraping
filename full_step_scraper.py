@@ -1134,38 +1134,95 @@ async def do_sequence(args) -> Dict[str, Any]:
 
             # Maps flow
             try:
+                set_step("maps-flow")
                 MAP_OPEN_XPATH = "//div//span[contains(., 'Voir sur la carte')]"
+                logging.info("[MAPS] ============ STARTING MAP FLOW ============")
+                logging.info(f"[MAPS] Looking for MAP_OPEN_XPATH: {MAP_OPEN_XPATH}")
+                
+                # Check if button exists
+                try:
+                    map_button = page.locator(MAP_OPEN_XPATH).first
+                    is_visible = await map_button.is_visible(timeout=5000)
+                    logging.info(f"[MAPS] Map button found and visible: {is_visible}")
+                except Exception as e:
+                    logging.error(f"[MAPS] ERROR: Could not find map button: {e}")
+                    raise
+                
                 logging.info("[MAPS] Clicking 'Voir sur la carte' button...")
-                await page.locator(MAP_OPEN_XPATH).click()
-                logging.info("[MAPS] Waiting for map initialization (networkidle)...")
+                try:
+                    await page.locator(MAP_OPEN_XPATH).click()
+                    logging.info("[MAPS] Map button clicked successfully")
+                except Exception as e:
+                    logging.error(f"[MAPS] ERROR: Failed to click map button: {e}", exc_info=True)
+                    raise
+                
+                logging.info("[MAPS] Waiting for map initialization (networkidle, timeout 30s)...")
                 try:
                     await page.wait_for_load_state("networkidle", timeout=30000)
-                    logging.info("[MAPS] Network idle after map open.")
-                except Exception:
-                    logging.info("[MAPS] Network did not go idle after clicking map open, proceeding anyway.")
+                    logging.info("[MAPS] ✓ Network idle after map open.")
+                except Exception as e:
+                    logging.warning(f"[MAPS] ⚠ Network did not go idle after clicking map open: {e}")
+                    logging.info("[MAPS] Proceeding anyway...")
+                
                 logging.info("[MAPS] Waiting 2 seconds for map tiles to render...")
                 await asyncio.sleep(2)
 
                 logging.info("[MAPS] Checking for 'Fermé' button to close popups...")
                 try:
                     ferme_button = page.get_by_label("Fermé")
-                    for _ in range(2):
-                        if await ferme_button.is_visible(timeout=2000):
-                            logging.info("[MAPS] 'Fermé' button visible, clicking to close popup.")
-                            await ferme_button.click()
-                            await asyncio.sleep(0.5)
-                except Exception:
-                    logging.info("[MAPS] No 'Fermé' button found or error closing popups.")
+                    ferme_count = 0
+                    for attempt in range(2):
+                        try:
+                            if await ferme_button.is_visible(timeout=2000):
+                                logging.info(f"[MAPS] 'Fermé' button visible (attempt {attempt+1}), clicking to close popup.")
+                                await ferme_button.click()
+                                ferme_count += 1
+                                await asyncio.sleep(0.5)
+                        except Exception as ferme_e:
+                            logging.debug(f"[MAPS] Attempt {attempt+1} to find/click 'Fermé' failed: {ferme_e}")
+                    logging.info(f"[MAPS] Closed {ferme_count} popups with 'Fermé' button")
+                except Exception as e:
+                    logging.warning(f"[MAPS] ⚠ Error handling 'Fermé' button: {e}")
 
                 logging.info("[MAPS] Capturing zoom-fit screenshot of map area...")
-                await sc.shot_xpath_zoomfit(page, "//main[@id='main']/div[contains(@class,'map_blocvueSession__')]//div[contains(@class,'map_blocvueIntoSession__')]", "map_opened_zoom33", zoom=0.80)
-                canvas_loc = page.locator("//div[contains(@class,'maplibregl-canvas-container')]//canvas[contains(@class,'maplibregl-canvas')]").last
-                await canvas_loc.wait_for(timeout=10000)
-                # Wait for canvas to be properly rendered (maplibre canvas)
-                await page.wait_for_function("() => document.querySelector('.maplibregl-canvas-container canvas.maplibregl-canvas')?.getContext('2d')")
+                try:
+                    await sc.shot_xpath_zoomfit(page, "//main[@id='main']/div[contains(@class,'map_blocvueSession__')]//div[contains(@class,'map_blocvueIntoSession__')]", "map_opened_zoom33", zoom=0.80)
+                    logging.info("[MAPS] ✓ Zoom-fit screenshot saved")
+                except Exception as e:
+                    logging.error(f"[MAPS] ERROR in zoom-fit screenshot: {e}", exc_info=True)
 
+                # Locate canvas
+                logging.info("[MAPS] Locating canvas element...")
+                canvas_xpath = "//div[contains(@class,'maplibregl-canvas-container')]//canvas[contains(@class,'maplibregl-canvas')]"
+                try:
+                    canvas_count = await page.locator(canvas_xpath).count()
+                    logging.info(f"[MAPS] Found {canvas_count} canvas elements")
+                    if canvas_count == 0:
+                        logging.warning("[MAPS] ⚠ No canvas elements found!")
+                except Exception as e:
+                    logging.error(f"[MAPS] ERROR counting canvas elements: {e}")
+
+                canvas_loc = page.locator(canvas_xpath).last
+                
+                logging.info("[MAPS] Waiting for canvas to be attached (timeout 10s)...")
+                try:
+                    await canvas_loc.wait_for(timeout=10000)
+                    logging.info("[MAPS] ✓ Canvas is attached")
+                except Exception as e:
+                    logging.error(f"[MAPS] ERROR: Canvas not attached after 10s: {e}", exc_info=True)
+                    raise
+
+                # Wait for canvas to be properly rendered (maplibre canvas)
+                logging.info("[MAPS] Waiting for 2D canvas context...")
+                try:
+                    await page.wait_for_function("() => document.querySelector('.maplibregl-canvas-container canvas.maplibregl-canvas')?.getContext('2d')", timeout=15000)
+                    logging.info("[MAPS] ✓ Canvas 2D context is ready")
+                except Exception as e:
+                    logging.warning(f"[MAPS] ⚠ Canvas 2D context not available: {e}")
+                    logging.info("[MAPS] Proceeding with caution...")
 
                 # Hide overlays before canvas capture
+                logging.info("[MAPS] Hiding overlays before canvas capture...")
                 overlay_xpaths = [
                     "//div[contains(@class,'map_cardResultMap')]",
                     "//div[contains(@class,'map_customMapControls')]",
@@ -1173,18 +1230,65 @@ async def do_sequence(args) -> Dict[str, Any]:
                     "//div[contains(@class,'map_mapAlert')]/div",
                     "//div[contains(@class,'noprint')]/div[contains(@class,'map_mapcontrolOptionSession')]"
                 ]
-                await page.evaluate(f"xpaths => {{ for (const xpath of xpaths) {{ const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < result.snapshotLength; i++) {{ result.snapshotItem(i).style.display = 'none'; }} }} }}", overlay_xpaths)
+                
+                try:
+                    hidden_count = 0
+                    for xpath in overlay_xpaths:
+                        count = await page.evaluate(f"xpath => document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null).snapshotLength", xpath)
+                        if count > 0:
+                            logging.debug(f"[MAPS] Hiding {count} elements: {xpath}")
+                            await page.evaluate(f"xpath => {{ const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < result.snapshotLength; i++) {{ result.snapshotItem(i).style.display = 'none'; }} }}", xpath)
+                            hidden_count += count
+                    logging.info(f"[MAPS] Hidden {hidden_count} overlay elements")
+                except Exception as e:
+                    logging.error(f"[MAPS] ERROR hiding overlays: {e}", exc_info=True)
+                    raise
 
+                # Capture canvas
                 img_path = out_dir / f"02_map_opened_zoom33.png"
-                await canvas_loc.screenshot(path=str(img_path))
+                logging.info(f"[MAPS] Taking canvas screenshot to: {img_path}")
+                try:
+                    await canvas_loc.screenshot(path=str(img_path))
+                    file_size = img_path.stat().st_size if img_path.exists() else 0
+                    logging.info(f"[MAPS] ✓ Canvas screenshot saved ({file_size} bytes)")
+                except Exception as e:
+                    logging.error(f"[MAPS] ERROR taking canvas screenshot: {e}", exc_info=True)
+                    raise
 
                 # Restore overlays
-                await page.evaluate(f"xpaths => {{ for (const xpath of xpaths) {{ const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < result.snapshotLength; i++) {{ result.snapshotItem(i).style.display = ''; }} }} }}", overlay_xpaths)
+                logging.info("[MAPS] Restoring overlays after canvas capture...")
+                try:
+                    restored_count = 0
+                    for xpath in overlay_xpaths:
+                        count = await page.evaluate(f"xpath => document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null).snapshotLength", xpath)
+                        if count > 0:
+                            logging.debug(f"[MAPS] Restoring {count} elements: {xpath}")
+                            await page.evaluate(f"xpath => {{ const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); for (let i = 0; i < result.snapshotLength; i++) {{ result.snapshotItem(i).style.display = ''; }} }}", xpath)
+                            restored_count += count
+                    logging.info(f"[MAPS] Restored {restored_count} overlay elements")
+                except Exception as e:
+                    logging.error(f"[MAPS] ERROR restoring overlays: {e}", exc_info=True)
                 
                 # Close map
-                await page.locator("//div[contains(@class,'map_categoriesItemListing__')]/span").click()
+                logging.info("[MAPS] Closing map...")
+                close_xpath = "//div[contains(@class,'map_categoriesItemListing__')]/span"
+                try:
+                    close_count = await page.locator(close_xpath).count()
+                    logging.info(f"[MAPS] Found {close_count} close button(s)")
+                    if close_count > 0:
+                        await page.locator(close_xpath).click()
+                        logging.info("[MAPS] ✓ Map closed")
+                    else:
+                        logging.warning(f"[MAPS] ⚠ Close button not found at: {close_xpath}")
+                except Exception as e:
+                    logging.warning(f"[MAPS] ⚠ Error closing map: {e}")
+                
+                logging.info("[MAPS] ============ MAP FLOW COMPLETED ============")
+                
             except Exception as e:
-                logging.warning(f"Map flow failed: {e}")
+                set_step("maps-error")
+                logging.error(f"[MAPS] ❌ MAP FLOW FAILED: {e}", exc_info=True)
+                logging.error(f"[MAPS] Full traceback: {traceback.format_exc()}")
 
             # --- Satellite toggle (best-effort) ---
             # try:

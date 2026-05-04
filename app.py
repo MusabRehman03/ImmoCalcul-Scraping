@@ -54,12 +54,19 @@ def run_async_job(job_id: str):
         docker_cmd = [
             "docker", "run", "--rm",
             "-v", f"{os.getcwd()}/run_steps:/app/run_steps",
+            "-v", f"{os.getcwd()}/logs:/app/logs",
+            "-e", f"IMMOCALCUL_EMAIL={Config.IMMOCALCUL_EMAIL or ''}",
+            "-e", f"IMMOCALCUL_PASSWORD={Config.IMMOCALCUL_PASSWORD or ''}",
+            "-e", f"PARENT_DRIVE_FOLDER_ID={Config.PARENT_DRIVE_FOLDER_ID or ''}",
+            "-e", f"USE_EXISTING_DRIVE_URL={Config.USE_EXISTING_DRIVE_URL}",
+            "-e", f"SPREADSHEET_ID={Config.SPREADSHEET_ID}",
+            "-e", f"WORKSHEET_GID={Config.WORKSHEET_GID}",
             "immocalcul-scraper",
-            "python3", "app.py", "--job-id", job_id
+            "python3", "sheet_processor.py", job_id
         ]
 
         logging.info(f"[DOCKER] Launching: {' '.join(docker_cmd)}")
-        result = subprocess.run(docker_cmd, capture_output=True, text=True)
+        result = subprocess.run(docker_cmd)
 
         if result.returncode == 0:
             active_jobs[job_id]["status"] = "completed"

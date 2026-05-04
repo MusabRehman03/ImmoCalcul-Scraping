@@ -58,6 +58,16 @@ All output (videos, traces, screenshots, summary.json) will be saved to:
 
 These are shared between your Mac and the Docker container via volume mount.
 
+### 4. Logs
+
+Logs are written under `/app/logs` in the container. To persist them on the host,
+make sure the `./logs` folder is mounted (already configured in `docker-compose.yml`
+and `docker-run.sh`). You should see files like:
+
+- `logs/sc-immocalcul.log`
+- `logs/sc-immocalcul-<run_id>.log`
+- `logs/error.log`
+
 ## Environment Variables
 
 The `docker-compose.yml` automatically passes your environment variables:

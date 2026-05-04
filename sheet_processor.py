@@ -34,6 +34,7 @@ class SheetRow(BaseModel):
     city: str = ""
     postal_code: str = ""
     other_unit: str = ""
+    mailing_unit: str = ""
     immocalcul_status: str = ""
     analyse_risque: str = ""
     picture_1: str = ""
@@ -149,6 +150,7 @@ def parse_row(row: List, row_index: int) -> Optional[SheetRow]:
             city=get_cell_value(row, Config.COL_CITY),
             postal_code=get_cell_value(row, Config.COL_POSTAL_CODE),
             other_unit=get_cell_value(row, Config.COL_OTHER_UNIT),
+            mailing_unit=get_cell_value(row, Config.COL_MAILING_UNIT),
             immocalcul_status=get_cell_value(row, Config.COL_IMMOCALCUL),
             analyse_risque=get_cell_value(row, Config.COL_ANALYSE_RISQUE),
             picture_1=get_cell_value(row, Config.COL_PICTURE_1),
@@ -353,9 +355,10 @@ async def run_scraper_async(row: SheetRow, worksheet, attempt: int = 1) -> Proce
     Updates the Google Sheet immediately upon completion with ALL fields.
     """
     try:
-        if row.other_unit:
+        if row.other_unit or row.mailing_unit:
+            unit_value = row.other_unit or row.mailing_unit
             logging.info(
-                f"   ⏭️ Skipping row {row.row_index} (Ref: {row.reference_number}) - Other Unit present"
+                f"   ⏭️ Skipping row {row.row_index} (Ref: {row.reference_number}) - Unit present: {unit_value}"
             )
             updates = {Config.COL_IMMOCALCUL: 2}
             updated_count = update_multiple_cells(worksheet, row.row_index, updates)
@@ -539,7 +542,7 @@ async def process_row_with_retry(row: SheetRow, worksheet, semaphore: asyncio.Se
         for attempt in range(1, Config.MAX_RETRIES_PER_ROW + 1):
             result = await run_scraper_async(row, worksheet, attempt)
             
-            if result.status == "success":
+            if result.status in ("success", "skipped"):
                 return result
             
             if attempt < Config.MAX_RETRIES_PER_ROW:
@@ -549,7 +552,7 @@ async def process_row_with_retry(row: SheetRow, worksheet, semaphore: asyncio.Se
                 )
                 await asyncio.sleep(Config.RETRY_DELAY)
         
-        if result.status != "success":
+        if result.status == "failed":
             updated_count = update_multiple_cells(
                 worksheet,
                 row.row_index,
@@ -659,6 +662,7 @@ async def process_all_sheet_rows(job_id: str):
         # Calculate statistics
         successful = 0
         failed = 0
+        skipped = 0
         total_cells_updated = 0
         
         for result in results:
@@ -668,6 +672,8 @@ async def process_all_sheet_rows(job_id: str):
             elif result.status == "success":
                 successful += 1
                 total_cells_updated += result.updated_cells
+            elif result.status == "skipped":
+                skipped += 1
             else:
                 failed += 1
         
@@ -685,6 +691,7 @@ async def process_all_sheet_rows(job_id: str):
         logging.info(f"  Duration: {duration:.1f}s ({duration/60:.1f} minutes)")
         logging.info(f"  Total rows: {len(rows_to_process)}")
         logging.info(f"  ✅ Successful: {successful}")
+        logging.info(f"  ⏭️ Skipped: {skipped}")
         logging.info(f"  ❌ Failed: {failed}")
         logging.info(f"  📝 Total cells updated: {total_cells_updated}")
         

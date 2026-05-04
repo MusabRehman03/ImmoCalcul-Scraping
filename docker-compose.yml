@@ -6,6 +6,7 @@ services:
     container_name: immocalcul-scraper
     volumes:
       - .:/app
+      - ./logs:/app/logs
     environment:
       - DISPLAY=:99
       - IMMOCALCUL_EMAIL=${IMMOCALCUL_EMAIL}

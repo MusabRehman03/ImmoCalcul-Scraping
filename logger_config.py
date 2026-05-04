@@ -1,10 +1,12 @@
 import logging
 import logging.handlers
+import os
 from pathlib import Path
 
 # Create logs directory if it doesn't exist
-LOG_DIR = Path(__file__).resolve().parent / 'logs'
-LOG_DIR.mkdir(exist_ok=True)
+DEFAULT_LOG_DIR = Path(__file__).resolve().parent / 'logs'
+LOG_DIR = Path(os.getenv('LOG_DIR', DEFAULT_LOG_DIR)).expanduser().resolve()
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 def setup_logging():
     """

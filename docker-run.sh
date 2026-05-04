@@ -22,6 +22,7 @@ fi
 docker run -it \
   --entrypoint bash \
   -v "$(pwd):/app" \
+  -v "$(pwd)/logs:/app/logs" \
   -e IMMOCALCUL_EMAIL="${IMMOCALCUL_EMAIL}" \
   -e IMMOCALCUL_PASSWORD="${IMMOCALCUL_PASSWORD}" \
   -e PARENT_DRIVE_FOLDER_ID="${PARENT_DRIVE_FOLDER_ID}" \

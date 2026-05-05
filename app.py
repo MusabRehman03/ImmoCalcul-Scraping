@@ -50,9 +50,15 @@ def run_async_job(job_id: str):
             "started_at": datetime.utcnow().isoformat()
         }
 
+        container_name = "immocalcul-batch"
+
+        # Remove any existing container instance
+        subprocess.run(["docker", "rm", "-f", container_name], check=False)
+
         # Build the docker run command
         docker_cmd = [
             "docker", "run", "--rm",
+            "--name", container_name,
             "-v", f"{os.getcwd()}/run_steps:/app/run_steps",
             "-v", f"{os.getcwd()}/logs:/app/logs",
             "-e", f"IMMOCALCUL_EMAIL={Config.IMMOCALCUL_EMAIL or ''}",

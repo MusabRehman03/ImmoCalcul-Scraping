@@ -355,8 +355,8 @@ async def run_scraper_async(row: SheetRow, worksheet, attempt: int = 1) -> Proce
     Updates the Google Sheet immediately upon completion with ALL fields.
     """
     try:
-        if row.other_unit or row.mailing_unit:
-            unit_value = row.other_unit or row.mailing_unit
+        if row.other_unit:
+            unit_value = row.other_unit
             logging.info(
                 f"   ⏭️ Skipping row {row.row_index} (Ref: {row.reference_number}) - Unit present: {unit_value}"
             )

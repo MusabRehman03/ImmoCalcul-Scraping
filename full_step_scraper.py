@@ -30,6 +30,7 @@ from typing import List, Optional, Dict, Any
 import pikepdf
 import tempfile
 import shutil
+from urllib.parse import urljoin
 
 import requests
 from playwright.async_api import async_playwright, Page, TimeoutError as PWTimeoutError, Locator
@@ -493,7 +494,23 @@ async def capture_main_photo(page: Page, out_dir: Path, sc: StepCapture) -> Opti
             logging.info("Main photo element not found.")
             return None
         raw_path = out_dir / "main_photo_raw.png"
-        await img_el.screenshot(path=str(raw_path))
+
+        img_src = await img_el.get_attribute("src")
+        if img_src:
+            img_url = urljoin(page.url, img_src)
+            new_page = await page.context.new_page()
+            try:
+                await new_page.goto(img_url, wait_until="domcontentloaded", timeout=30000)
+                await new_page.wait_for_timeout(2000)
+                full_img = new_page.locator("img").first
+                if await full_img.count() > 0 and await full_img.is_visible(timeout=10000):
+                    await full_img.screenshot(path=str(raw_path))
+                else:
+                    await new_page.screenshot(path=str(raw_path))
+            finally:
+                await new_page.close()
+        else:
+            await img_el.screenshot(path=str(raw_path))
         final_path = out_dir / "main_photo.jpg"
         Image.open(raw_path).convert("RGB").save(final_path, quality=92)
         logging.info(f"Main photo captured and saved to {final_path}")
@@ -1006,7 +1023,7 @@ async def do_sequence(args) -> Dict[str, Any]:
             try:
             #     # Wait for autocomplete suggestion and click it if available
                 suggestion = page.locator(".map_adresseproperty__Q7GLP").first
-                await suggestion.wait_for(state="visible", timeout=8000)
+                await suggestion.wait_for(state="visible", timeout=30000)
                 await suggestion.click()
                 logging.info("Clicked address div.")
                 # Wait for property panel to become naturally visible

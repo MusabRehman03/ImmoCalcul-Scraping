@@ -565,15 +565,21 @@ def overlay_label(img_path: Path, label: str):
         logging.warning(f"Label overlay failed for {img_path.name}: {e}")
 
 ## PDF Optimization settings (at the top with other constants)
-PDF_TARGET_DPI = int(os.getenv("PDF_TARGET_DPI", "90"))  # DPI for regular compressed images
-PDF_JPEG_QUALITY = int(os.getenv("PDF_JPEG_QUALITY", "65"))  # Quality for regular compressed images
-PDF_HIGH_DPI = int(os.getenv("PDF_HIGH_DPI", "180"))  # Higher DPI for Avis/Measures tabs
-PDF_HIGH_QUALITY = int(os.getenv("PDF_HIGH_QUALITY", "80"))  # Higher quality for Avis/Measures tabs
+PDF_TARGET_DPI = int(os.getenv("PDF_TARGET_DPI", "75"))  # DPI for regular compressed images
+PDF_JPEG_QUALITY = int(os.getenv("PDF_JPEG_QUALITY", "60"))  # Quality for regular compressed images
+PDF_HIGH_DPI = int(os.getenv("PDF_HIGH_DPI", "150"))  # Higher DPI for Avis/Measures tabs
+PDF_HIGH_QUALITY = int(os.getenv("PDF_HIGH_QUALITY", "78"))  # Higher quality for Avis/Measures tabs
+PDF_MAP_DPI = int(os.getenv("PDF_MAP_DPI", "90"))  # DPI for map images
+PDF_MAP_QUALITY = int(os.getenv("PDF_MAP_QUALITY", "55"))  # Quality for map images
+PDF_MAP_CANVAS_DPI = int(os.getenv("PDF_MAP_CANVAS_DPI", "80"))  # DPI for map canvas layers
+PDF_MAP_CANVAS_QUALITY = int(os.getenv("PDF_MAP_CANVAS_QUALITY", "50"))  # Quality for map canvas layers
+PDF_MAX_WIDTH = int(os.getenv("PDF_MAX_WIDTH", "1600"))  # Max width for regular images
+PDF_MAP_MAX_WIDTH = int(os.getenv("PDF_MAP_MAX_WIDTH", "1400"))  # Max width for map images
+PDF_MAP_CANVAS_MAX_WIDTH = int(os.getenv("PDF_MAP_CANVAS_MAX_WIDTH", "1200"))  # Max width for map canvas images
 
 # Files that should NOT be compressed (keep original quality)
 NO_COMPRESS_PATTERNS = [
     "01_main_tab_zoom33.png",
-    "02_map_opened_zoom33.png",
     "03_avis_tab_zoom33.png", 
     "04_map_opened_zoom33.png"
 ]
@@ -582,6 +588,13 @@ HIGH_DPI_PATTERNS = [
     "avis_tab_zoom33.png",
     "measures_tab_zoom33.png",
 ]
+
+MAP_DPI_PATTERNS = [
+    "02_map_opened_zoom33.png",
+    "map_opened_zoom33.png",
+]
+
+MAP_CANVAS_PREFIX = "map_canvas_"
 
 def write_pdf_from_screenshots(out_dir: Path, summary: dict) -> Optional[Path]:
     """
@@ -638,6 +651,8 @@ def write_pdf_from_screenshots(out_dir: Path, summary: dict) -> Optional[Path]:
                 # Check if this file should skip compression
                 should_skip_compression = any(pattern in filename for pattern in NO_COMPRESS_PATTERNS)
                 is_high_dpi = any(pattern in filename for pattern in HIGH_DPI_PATTERNS)
+                is_map_dpi = any(pattern in filename for pattern in MAP_DPI_PATTERNS)
+                is_map_canvas = filename.startswith(MAP_CANVAS_PREFIX)
                 
                 if should_skip_compression:
                     # Keep original quality - just convert to RGB and save as JPEG
@@ -668,8 +683,18 @@ def write_pdf_from_screenshots(out_dir: Path, summary: dict) -> Optional[Path]:
                     optimized_images.append(str(temp_img_path))
                     
                 else:
-                    target_dpi = PDF_HIGH_DPI if is_high_dpi else PDF_TARGET_DPI
-                    target_quality = PDF_HIGH_QUALITY if is_high_dpi else PDF_JPEG_QUALITY
+                    if is_high_dpi:
+                        target_dpi = PDF_HIGH_DPI
+                        target_quality = PDF_HIGH_QUALITY
+                    elif is_map_canvas:
+                        target_dpi = PDF_MAP_CANVAS_DPI
+                        target_quality = PDF_MAP_CANVAS_QUALITY
+                    elif is_map_dpi:
+                        target_dpi = PDF_MAP_DPI
+                        target_quality = PDF_MAP_QUALITY
+                    else:
+                        target_dpi = PDF_TARGET_DPI
+                        target_quality = PDF_JPEG_QUALITY
                     
                     # Convert to RGB (handle transparency)
                     if img.mode in ('RGBA', 'LA', 'P'):
@@ -684,13 +709,24 @@ def write_pdf_from_screenshots(out_dir: Path, summary: dict) -> Optional[Path]:
                     else:
                         img = img.convert('RGB')
                     
+                    # Downscale by max width first (controls file size)
+                    if is_map_canvas:
+                        max_width = PDF_MAP_CANVAS_MAX_WIDTH
+                    elif is_map_dpi:
+                        max_width = PDF_MAP_MAX_WIDTH
+                    else:
+                        max_width = PDF_MAX_WIDTH
+
+                    if img.width > max_width:
+                        scale = max_width / img.width
+                        img = img.resize((int(img.width * scale), int(img.height * scale)), Image.Resampling.LANCZOS)
+
                     # Scale to target DPI if current DPI is higher
                     current_dpi = img.info.get('dpi', (72, 72))[0]
 
                     if current_dpi > target_dpi:
                         scale = target_dpi / current_dpi
-                        new_size = (int(img.width * scale), int(img.height * scale))
-                        img = img.resize(new_size, Image.Resampling.LANCZOS)
+                        img = img.resize((int(img.width * scale), int(img.height * scale)), Image.Resampling.LANCZOS)
                     
                     # Save compressed JPEG at target DPI
                     temp_img_path = temp_dir / f"compressed_{idx:04d}.jpg"

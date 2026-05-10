@@ -433,6 +433,180 @@ class StepCapture:
 
         return out_path
 
+    async def shot_xpath_paged(self, page: Page, xpath: str, tag_prefix: str, zoom: float = 0.5, hide_fixed: bool = True) -> List[Path]:
+        """
+        Capture a tall element in multiple screenshots at a fixed zoom.
+        Calculates how many pages are needed based on scroll height, then
+        scrolls the container and captures each page.
+        """
+        out_paths: List[Path] = []
+        locator = page.locator(xpath).first
+        el = None
+        try:
+            await locator.wait_for(state="attached", timeout=30000)
+            el = await locator.element_handle()
+            if not el:
+                raise RuntimeError("Element handle not found for paged capture.")
+
+            prep = await el.evaluate(
+                """(node, ctx) => {
+                    const z = ctx.z;
+                    const hideFixed = ctx.hideFixed;
+
+                    const getScroller = (n) => {
+                        let cur = n;
+                        while (cur && cur !== document.body) {
+                            const cs = getComputedStyle(cur);
+                            const oy = cs.overflowY;
+                            if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && cur.scrollHeight > cur.clientHeight + 1) return cur;
+                            cur = cur.parentElement;
+                        }
+                        return document.scrollingElement || document.documentElement;
+                    };
+
+                    const scroller = getScroller(node);
+                    if (!scroller) return null;
+
+                    const mark = (elem) => {
+                        if (!elem.hasAttribute('data-prev-style')) {
+                            elem.setAttribute('data-prev-style', elem.getAttribute('style') || '');
+                        }
+                    };
+
+                    mark(scroller);
+
+                    const wrapper = document.createElement('div');
+                    wrapper.setAttribute('data-zoom-wrapper', '1');
+                    wrapper.style.transformOrigin = 'top left';
+                    wrapper.style.transform = `scale(${z})`;
+
+                    const scRect = scroller.getBoundingClientRect();
+                    const scWidth = scRect.width || scroller.clientWidth;
+                    wrapper.style.width = (scWidth / z) + 'px';
+
+                    const kids = Array.from(scroller.childNodes);
+                    for (const ch of kids) wrapper.appendChild(ch);
+                    scroller.appendChild(wrapper);
+
+                    scroller.style.overflowY = 'auto';
+                    scroller.scrollTop = 0;
+
+                    if (hideFixed) {
+                        const scrollerAncestors = new Set();
+                        let p = scroller;
+                        while (p) { scrollerAncestors.add(p); p = p.parentElement; }
+
+                        const all = document.querySelectorAll('*');
+                        for (const e of all) {
+                            const pos = getComputedStyle(e).position;
+                            if ((pos === 'fixed' || pos === 'sticky') && !scroller.contains(e) && !scrollerAncestors.has(e)) {
+                                if (!e.hasAttribute('data-prev-style')) {
+                                    e.setAttribute('data-prev-style', e.getAttribute('style') || '');
+                                }
+                                e.style.display = 'none';
+                                e.setAttribute('data-zoom-hidden', '1');
+                            }
+                        }
+                    }
+
+                    return {
+                        scrollHeight: scroller.scrollHeight,
+                        clientHeight: scroller.clientHeight
+                    };
+                }""",
+                {"z": float(zoom), "hideFixed": bool(hide_fixed)}
+            )
+            if not prep:
+                raise RuntimeError("Failed to prepare paged capture wrapper.")
+
+            scroll_height = int(prep.get("scrollHeight") or 0)
+            client_height = int(prep.get("clientHeight") or 0)
+            if scroll_height <= 0 or client_height <= 0:
+                raise RuntimeError("Invalid scroll metrics for paged capture.")
+
+            # Restore original logic: use client_height for paging
+            pages = max(1, (scroll_height + client_height - 1) // client_height)
+            logging.info(f"Paged capture: {pages} screenshot(s) needed at zoom {zoom} (client height: {client_height}px).")
+
+            # Only take the first half of the screenshots
+            max_pages = max(1, pages // 2)
+            for idx in range(max_pages):
+                offset = idx * client_height
+                await el.evaluate(
+                    """(node, y) => {
+                        const getScroller = (n) => {
+                            let cur = n;
+                            while (cur && cur !== document.body) {
+                                const cs = getComputedStyle(cur);
+                                const oy = cs.overflowY;
+                                if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && cur.scrollHeight > cur.clientHeight + 1) return cur;
+                                cur = cur.parentElement;
+                            }
+                            return document.scrollingElement || document.documentElement;
+                        };
+                        const scroller = getScroller(node);
+                        if (scroller) scroller.scrollTop = y;
+                    }""",
+                    offset
+                )
+                # Wait 2 seconds for content to fully load after scrolling
+                await page.wait_for_timeout(2000)
+                name = f"{self.counter:02d}_{tag_prefix}_part{idx + 1}.png"
+                out_path = self.base_dir / name
+                await el.screenshot(path=str(out_path))
+                out_paths.append(out_path)
+                logging.info(f"Paged screenshot captured: {name}")
+                self.counter += 1
+
+            logging.info(f"Paged screenshot: took only the first {max_pages} out of {pages} possible pages.")
+
+        except Exception as e:
+            set_step("capture-failed")
+            logging.warning(f"Paged element screenshot failed ({tag_prefix}): {e}", exc_info=True)
+        finally:
+            try:
+                if el:
+                    await el.evaluate(
+                        """(node) => {
+                            const getScroller = (n) => {
+                                let cur = n;
+                                while (cur && cur !== document.body) {
+                                    const cs = getComputedStyle(cur);
+                                    const oy = cs.overflowY;
+                                    if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && cur.scrollHeight > cur.clientHeight + 1) return cur;
+                                    cur = cur.parentElement;
+                                }
+                                return document.scrollingElement || document.documentElement;
+                            };
+                            const scroller = getScroller(node);
+                            if (!scroller) return;
+
+                            const wrapper = scroller.querySelector('[data-zoom-wrapper="1"]');
+                            if (wrapper) {
+                                const kids = Array.from(wrapper.childNodes);
+                                for (const ch of kids) scroller.insertBefore(ch, wrapper);
+                                wrapper.remove();
+                            }
+
+                            const modified = document.querySelectorAll('[data-prev-style], [data-zoom-hidden]');
+                            for (const elem of modified) {
+                                if (elem.hasAttribute('data-prev-style')) {
+                                    const prev = elem.getAttribute('data-prev-style') || '';
+                                    if (prev) elem.setAttribute('style', prev);
+                                    else elem.removeAttribute('style');
+                                    elem.removeAttribute('data-prev-style');
+                                }
+                                if (elem.hasAttribute('data-zoom-hidden')) {
+                                    elem.removeAttribute('data-zoom-hidden');
+                                }
+                            }
+                        }"""
+                    )
+            except Exception:
+                pass
+
+        return out_paths
+
 
 def parse_amounts(text: str) -> List[int]:
     if not text:
@@ -592,6 +766,7 @@ HIGH_DPI_PATTERNS = [
 MAP_DPI_PATTERNS = [
     "02_map_opened_zoom33.png",
     "map_opened_zoom33.png",
+    "map_opened_zoom50",
 ]
 
 MAP_CANVAS_PREFIX = "map_canvas_"
@@ -1305,12 +1480,13 @@ async def do_sequence(args) -> Dict[str, Any]:
                 except Exception as e:
                     logging.warning(f"[MAPS] ⚠ Error handling 'Fermé' button: {e}")
 
-                logging.info("[MAPS] Capturing zoom-fit screenshot of map area...")
+                logging.info("[MAPS] Capturing paged screenshots of map area (zoom 0.5)...")
                 try:
-                    await sc.shot_xpath_zoomfit(page, "//main[@id='main']/div[contains(@class,'map_blocvueSession__')]//div[contains(@class,'map_blocvueIntoSession__')]", "map_opened_zoom33", zoom=0.80)
-                    logging.info("[MAPS] ✓ Zoom-fit screenshot saved")
+                    map_container_xpath = "//main[@id='main']/div[contains(@class,'map_blocvueSession__')]//div[contains(@class,'map_blocvueIntoSession__')]"
+                    map_shots = await sc.shot_xpath_paged(page, map_container_xpath, "map_opened_zoom50", zoom=0.5)
+                    logging.info(f"[MAPS] ✓ Paged screenshots saved: {len(map_shots)}")
                 except Exception as e:
-                    logging.error(f"[MAPS] ERROR in zoom-fit screenshot: {e}", exc_info=True)
+                    logging.error(f"[MAPS] ERROR in paged screenshot capture: {e}", exc_info=True)
 
                 # Locate canvas
                 logging.info("[MAPS] Locating canvas element...")

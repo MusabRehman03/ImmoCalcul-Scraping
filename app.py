@@ -5,6 +5,7 @@ Triggers ImmoCalcul scraper for eligible rows and updates sheet with results
 import os
 import uuid
 import logging
+import threading
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -17,6 +18,7 @@ load_dotenv()
 from config import Config
 from logger_config import set_step
 from sheet_processor import process_all_sheet_rows
+from docker_manager import run_container, stop_container, remove_container
 
 # Validate configuration on startup
 if not Config.validate():
@@ -39,40 +41,41 @@ app.add_middleware(
 
 # Track active jobs (in-memory; use Redis for production)
 active_jobs = {}
-
-import subprocess
+job_lock = threading.Lock()
+active_job_id = None
+CONTAINER_NAME = "immocalcul-batch"
 
 def run_async_job(job_id: str):
     """Run the batch processor inside a Docker container in the background."""
+    global active_job_id
     try:
         active_jobs[job_id] = {
             "status": "running",
             "started_at": datetime.utcnow().isoformat()
         }
 
-        container_name = "immocalcul-batch"
+        container_name = CONTAINER_NAME
+        volumes = {
+            f"{os.getcwd()}/run_steps": "/app/run_steps",
+            f"{os.getcwd()}/logs": "/app/logs",
+        }
+        env = {
+            "IMMOCALCUL_EMAIL": Config.IMMOCALCUL_EMAIL or "",
+            "IMMOCALCUL_PASSWORD": Config.IMMOCALCUL_PASSWORD or "",
+            "PARENT_DRIVE_FOLDER_ID": Config.PARENT_DRIVE_FOLDER_ID or "",
+            "USE_EXISTING_DRIVE_URL": str(Config.USE_EXISTING_DRIVE_URL),
+            "SPREADSHEET_ID": str(Config.SPREADSHEET_ID),
+            "WORKSHEET_GID": str(Config.WORKSHEET_GID),
+        }
+        command = ["python3", "sheet_processor.py", job_id]
 
-        # Remove any existing container instance
-        subprocess.run(["docker", "rm", "-f", container_name], check=False)
-
-        # Build the docker run command
-        docker_cmd = [
-            "docker", "run", "--rm",
-            "--name", container_name,
-            "-v", f"{os.getcwd()}/run_steps:/app/run_steps",
-            "-v", f"{os.getcwd()}/logs:/app/logs",
-            "-e", f"IMMOCALCUL_EMAIL={Config.IMMOCALCUL_EMAIL or ''}",
-            "-e", f"IMMOCALCUL_PASSWORD={Config.IMMOCALCUL_PASSWORD or ''}",
-            "-e", f"PARENT_DRIVE_FOLDER_ID={Config.PARENT_DRIVE_FOLDER_ID or ''}",
-            "-e", f"USE_EXISTING_DRIVE_URL={Config.USE_EXISTING_DRIVE_URL}",
-            "-e", f"SPREADSHEET_ID={Config.SPREADSHEET_ID}",
-            "-e", f"WORKSHEET_GID={Config.WORKSHEET_GID}",
-            "immocalcul-scraper",
-            "python3", "sheet_processor.py", job_id
-        ]
-
-        logging.info(f"[DOCKER] Launching: {' '.join(docker_cmd)}")
-        result = subprocess.run(docker_cmd)
+        result = run_container(
+            name=container_name,
+            image="immocalcul-scraper",
+            command=command,
+            volumes=volumes,
+            env=env,
+        )
 
         if result.returncode == 0:
             active_jobs[job_id]["status"] = "completed"
@@ -80,7 +83,7 @@ def run_async_job(job_id: str):
             logging.info(f"✓ Job {job_id} completed successfully (Docker)")
         else:
             active_jobs[job_id]["status"] = "failed"
-            active_jobs[job_id]["error"] = result.stderr
+            active_jobs[job_id]["error"] = result.stderr or result.stdout
             active_jobs[job_id]["failed_at"] = datetime.utcnow().isoformat()
             logging.error(f"✗ Job {job_id} failed in Docker: {result.stderr}")
 
@@ -89,6 +92,10 @@ def run_async_job(job_id: str):
         active_jobs[job_id]["error"] = str(e)
         active_jobs[job_id]["failed_at"] = datetime.utcnow().isoformat()
         logging.error(f"✗ Job {job_id} failed to launch Docker: {e}", exc_info=True)
+    finally:
+        active_job_id = None
+        if job_lock.locked():
+            job_lock.release()
 
 @app.get("/immocalcul/run")
 async def run_endpoint(request: Request, background_tasks: BackgroundTasks):
@@ -116,8 +123,26 @@ async def run_endpoint(request: Request, background_tasks: BackgroundTasks):
     logging.info(f"Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
     logging.info("="*60)
     
+    global active_job_id
+    previous_job_id = None
+    if not job_lock.acquire(blocking=False):
+        previous_job_id = active_job_id
+        logging.info("New request received while job %s is running. Stopping previous container.", previous_job_id)
+        if previous_job_id and previous_job_id in active_jobs:
+            active_jobs[previous_job_id]["status"] = "superseded"
+            active_jobs[previous_job_id]["superseded_at"] = datetime.utcnow().isoformat()
+        stop_container(CONTAINER_NAME)
+        remove_container(CONTAINER_NAME)
+        acquired = job_lock.acquire(timeout=30)
+        if not acquired:
+            raise HTTPException(status_code=409, detail={
+                "message": "Previous job is still shutting down",
+                "active_job_id": active_job_id,
+            })
+
     # Generate job ID
     job_id = str(uuid.uuid4())
+    active_job_id = job_id
     
     # Schedule background task
     background_tasks.add_task(run_async_job, job_id)
@@ -125,13 +150,19 @@ async def run_endpoint(request: Request, background_tasks: BackgroundTasks):
     logging.info(f"✓ Job {job_id} initiated and queued for processing")
     logging.info("="*60)
     
-    return {
+    response = {
         "message": "Batch processing initiated successfully",
         "job_id": job_id,
         "status": "running",
         "timestamp": datetime.utcnow().isoformat(),
         "instructions": "Monitor server logs for real-time progress. Processing runs in background."
     }
+    if previous_job_id:
+        response["previous_job"] = {
+            "job_id": previous_job_id,
+            "status": "stopped_and_removed",
+        }
+    return response
 
 @app.get("/health")
 async def health_check():

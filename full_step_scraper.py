@@ -1244,14 +1244,15 @@ async def do_sequence(args) -> Dict[str, Any]:
 
             # # Wait for property content to load after search selection
             try:
-            #     # Wait for autocomplete suggestion and click it if available
+                # Wait for autocomplete suggestion and click it if available
+                await page.wait_for_load_state("networkidle", timeout=90000)
                 suggestion = page.locator(".map_adresseproperty__Q7GLP").first
-                await suggestion.wait_for(state="visible", timeout=30000)
+                await suggestion.wait_for(state="visible", timeout=60000)
                 await suggestion.click()
                 logging.info("Clicked address div.")
                 # Wait for property panel to become naturally visible
                 await asyncio.sleep(3)
-                await page.wait_for_load_state("networkidle", timeout=30000)
+                
             except Exception:
                 logging.info("No autocomplete suggestion, trying Enter fallback.")
                 search_field = page.locator("#searchFieldLot")
@@ -1270,7 +1271,7 @@ async def do_sequence(args) -> Dict[str, Any]:
                 ]:
                     try:
                         el = page.locator(selector).first
-                        await el.wait_for(state="visible", timeout=30000)
+                        await el.wait_for(state="visible", timeout=60000)
                         panel_visible = True
                         logging.info(f"Property panel visible: {selector}")
                         break

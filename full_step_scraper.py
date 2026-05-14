@@ -1245,7 +1245,10 @@ async def do_sequence(args) -> Dict[str, Any]:
             # # Wait for property content to load after search selection
             try:
                 # Wait for autocomplete suggestion and click it if available
-                await page.wait_for_load_state("networkidle", timeout=90000)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=90000)
+                except Exception:
+                    logging.info("Network did not go idle in addressed div after 90s, continuing.")
                 suggestion = page.locator(".map_adresseproperty__Q7GLP").first
                 await suggestion.wait_for(state="visible", timeout=60000)
                 await suggestion.click()
@@ -1254,11 +1257,7 @@ async def do_sequence(args) -> Dict[str, Any]:
                 await asyncio.sleep(3)
                 
             except Exception:
-                logging.info("No autocomplete suggestion, trying Enter fallback.")
-                search_field = page.locator("#searchFieldLot")
-                await search_field.press("Enter")
-
-            
+                logging.info("No property div found.")
 
 
 

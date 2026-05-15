@@ -149,7 +149,7 @@ DATA_SECTION_XPATH = (
 LOT_SEARCH_PATH = "//div[contains(@class, 'map_rightSearch')]//span[contains(@class, 'map_TextListSearch')]//span[contains(@class, 'map_adresseproperty')]"
 RESUME_XPATH = "//div[contains(@class,'dataAdress_tabContainer')]//div[2]//p[contains(@class,'dataAdress_resume')]"
 CHAR6_XPATH = "(//div[contains(@class,'dataAdress_proprieteCaracteristiques')]//div[contains(@class,'dataAdress_caracteristiqueItem')])[6]//span[contains(@class,'dataAdress_caracteristiqueSubTitre')]"
-MAIN_PHOTO_XPATH = "//div[@class='tablet computer']/img"
+MAIN_PHOTO_XPATH = "//div[@class='dataAdress_streetViewFrame__HLgQN dataAdress_streetViewFrameDesktop__i3P0K']/img"
 AUTOCOMPLETE_ADDR_XPATH = "//div[contains(@class,'ElasticSearchAutocomplete_resultItem')]"
 RISK_ISSUES_XPATH = "//div[contains(@class,'dataAdress_iconAlertError')]/parent::div/following-sibling::div//h3"
 
@@ -1210,7 +1210,7 @@ async def do_sequence(args) -> Dict[str, Any]:
             # --- Auth with Improved Login Check ---
             set_step("auth")
             await page.goto("https://immocalcul.com/immobilier", timeout=240000, wait_until="domcontentloaded")
-            await asyncio.sleep(60) # Extra settle time for scripts
+            await asyncio.sleep(30) # Extra settle time for scripts
 
             # Check for the account/subscription info `div` to see if we're logged in.
             # account_div_selector = "//div[contains(@class,'map_abonnement__')]"

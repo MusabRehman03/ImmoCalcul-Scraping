@@ -726,8 +726,7 @@ def create_docx_summary(out_dir: Path, summary: dict) -> Optional[Path]:
 
 def error_file(message):
     try:
-        with open("/home/bots/modules/SC-ImmoCalcul/error.txt", "a", encoding="utf-8") as f:
-            f.write(str(message) + "\n")
+        logging.error(str(message))
     except Exception:
         pass
 

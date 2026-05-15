@@ -19,6 +19,8 @@ from google.auth.transport.requests import Request
 from pydantic import BaseModel
 
 from config import Config
+if "LOG_RUN_ID" not in os.environ:
+    os.environ["LOG_RUN_ID"] = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 from logger_config import set_step, add_run_log_handler
 
 class SheetRow(BaseModel):
@@ -435,12 +437,17 @@ async def run_scraper_async(row: SheetRow, worksheet, attempt: int = 1) -> Proce
         
         # Run scraper subprocess
         logging.info(f"   🚀 Launching scraper subprocess for row {row.row_index}...")
-        
+
+        run_label = os.environ.get("LOG_RUN_ID") or datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        child_env = os.environ.copy()
+        child_env["LOG_RUN_ID"] = run_label
+
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=os.getcwd()
+            cwd=os.getcwd(),
+            env=child_env
         )
         
         try:
@@ -621,7 +628,7 @@ async def process_all_sheet_rows(job_id: str):
 
         # --- END EARLY DEBUG PRINTS ---
 
-        run_label = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        run_label = os.environ.get("LOG_RUN_ID") or datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         run_log_path = add_run_log_handler(run_label)
         logging.info(f"Run log: {run_log_path}")
         logging.info("STARTED SHEET PROCESSOR - Entered process_all_sheet_rows")

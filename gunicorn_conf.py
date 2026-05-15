@@ -9,6 +9,6 @@ worker_class = 'uvicorn.workers.UvicornWorker'
 
 # Logging options
 loglevel = 'debug'
-accesslog = '/home/bots/modules/SC-ImmoCalcul/access_log'
-errorlog = '/home/bots/modules/SC-ImmoCalcul/error_log'
+accesslog = '/home/bots/modules/SC-ImmoCalcul/logs/sc-immocalcul.log'
+errorlog = '/home/bots/modules/SC-ImmoCalcul/logs/sc-immocalcul.log'
 

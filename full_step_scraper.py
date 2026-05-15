@@ -1002,10 +1002,9 @@ def create_docx_summary(out_dir: Path, summary: dict) -> Optional[Path]:
         logging.warning(f"DOCX creation failed: {e}")
     return None
 
-def error_file(message):
+def error_file(message, run_started_at: Optional[datetime] = None):
     try:
-        with open("/home/bots/modules/SC-ImmoCalcul/error.txt", "a", encoding="utf-8") as f:
-            f.write(str(message) + "\n")
+        logging.error(str(message))
     except Exception:
         pass
 
@@ -1210,45 +1209,64 @@ async def do_sequence(args) -> Dict[str, Any]:
         try:
             # --- Auth with Improved Login Check ---
             set_step("auth")
-            await page.goto("https://immocalcul.com/immobilier", timeout=90000, wait_until="domcontentloaded")
-            await asyncio.sleep(1.2) # Extra settle time for scripts
+            await page.goto("https://immocalcul.com/immobilier", timeout=240000, wait_until="domcontentloaded")
+            await asyncio.sleep(60) # Extra settle time for scripts
 
             # Check for the account/subscription info `div` to see if we're logged in.
-            account_div_selector = "//div[contains(@class,'map_abonnement__')]"
-            try:
-                await page.locator(account_div_selector).first.wait_for(timeout=50000)
+            # account_div_selector = "//div[contains(@class,'map_abonnement__')]"
+            account_div_selector = "//div[contains(@class,'Header_contour_profil__VJbHt')]"
+            account_div = page.locator(account_div_selector).first
+            if await account_div.is_visible(timeout=30000):
                 logging.info("Account info div found. Already logged in.")
-            except PWTimeoutError:
-                logging.info("Account info div not found. Performing login...")
-                await page.locator("//span[contains(text(),'Connexion')]").first.click()
-                await page.fill("//input[@type='email']", email)
-                await page.fill("//input[@type='password']", password)
-                await page.locator("(//button[contains(text(),'Connexion')])[last()]").click()
+            else:
+                logging.info("Account info div not found. Checking for connexion-text button...")
+                connexion_button = page.locator(".connexion-text").first
+                if await connexion_button.is_visible(timeout=30000):
+                    await connexion_button.click()
+                    await page.fill("//input[@type='email']", email)
+                    await page.fill("//input[@type='password']", password)
+                    await page.locator("(//button[contains(text(),'Connexion')])[last()]").click()
+                else:
+                    logging.warning("connexion-text button not visible; checking account info again.")
+                    try:
+                        if await account_div.is_visible(timeout=30000):
+                            logging.info("Account info div found after recheck. Proceeding.")
+                        else:
+                            raise RuntimeError("connexion-text not visible")
+                    except Exception as e:
+                        logging.error(
+                            f"User not logged in and login flow failed because of this error: {e}",
+                            exc_info=True,
+                        )
+                        raise
 
             # Wait for the main page to be ready after potential login
             await page.wait_for_selector("#searchField, #searchFieldLot", timeout=90000)
             logging.info("Main page is ready.")
+        except Exception as e:
+            logging.error(f"Failed to load immocalcul page or login flow failed: {e}", exc_info=True)
+            raise
 
-            # --- Robust Search with Human-like Typing ---
-            set_step("search")
-            if args.lot:
-                search_selector = "#searchFieldLot"
-                search_query = args.lot
-            else:
-                search_selector = "#searchField"
-                search_query = f"{args.address_number or ''} {args.address_street or ''} {args.address_city or ''}".strip()
+        # --- Robust Search with Human-like Typing ---
+        set_step("search")
+        if args.lot:
+            search_selector = "#searchFieldLot"
+            search_query = args.lot
+        else:
+            search_selector = "#searchField"
+            search_query = f"{args.address_number or ''} {args.address_street or ''} {args.address_city or ''}".strip()
 
-            logging.info(f"Searching for: '{search_query}' with robust autocomplete.")
-            search_field = page.locator(search_selector)
-            await robust_autocomplete(page, search_field, search_query)
+        logging.info(f"Searching for: '{search_query}' with robust autocomplete.")
+        search_field = page.locator(search_selector)
+        await robust_autocomplete(page, search_field, search_query)
 
-            # # Wait for property content to load after search selection
+        # # Wait for property content to load after search selection
+        try:
+            # Wait for autocomplete suggestion and click it if available
             try:
-                # Wait for autocomplete suggestion and click it if available
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=90000)
-                except Exception:
-                    logging.info("Network did not go idle in addressed div after 90s, continuing.")
+                await page.wait_for_load_state("networkidle", timeout=90000)
+            except Exception:
+                logging.info("Network did not go idle in addressed div after 90s, continuing.")
                 suggestion = page.locator(".map_adresseproperty__Q7GLP").first
                 await suggestion.wait_for(state="visible", timeout=60000)
                 await suggestion.click()
@@ -1586,15 +1604,6 @@ async def do_sequence(args) -> Dict[str, Any]:
                 set_step("maps-error")
                 logging.error(f"[MAPS] ❌ MAP FLOW FAILED: {e}", exc_info=True)
                 logging.error(f"[MAPS] Full traceback: {traceback.format_exc()}")
-
-            # --- Satellite toggle (best-effort) ---
-            # try:
-            #     sat_btn = page.locator(SATELLITE_BTN_XPATH).first
-            #     if await sat_btn.is_visible(timeout=4000):
-            #         await sat_btn.click()
-            #         await page.wait_for_load_state("networkidle")
-            # except Exception as e:
-            #     logging.warning(f"Satellite toggle failed: {e}")
 
             # --- Map layers: open menu, click each layer by text, wait, screenshot, label ---
             try:

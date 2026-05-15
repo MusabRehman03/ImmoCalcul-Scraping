@@ -1,17 +1,19 @@
 import logging
 import logging.handlers
 import os
+from datetime import datetime
 from pathlib import Path
 
 # Create logs directory if it doesn't exist
 DEFAULT_LOG_DIR = Path(__file__).resolve().parent / 'logs'
 LOG_DIR = Path(os.getenv('LOG_DIR', DEFAULT_LOG_DIR)).expanduser().resolve()
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+MAIN_LOG_PATH = None
 
 def setup_logging():
     """
     Sets up the logging system as per the project requirements.
-    - Two log files: sc-immocalcul.log and error.log
+    - Single log file with timestamp in the name (all levels)
     - Custom format: [YYYY-MM-DD HH:MM:SS] LEVEL=... step=... msg="..."
     - Log rotation: 5 files of 5MB each.
     """
@@ -28,25 +30,19 @@ def setup_logging():
     log_format = '[%(asctime)s] LEVEL=%(levelname)s step=%(step)s msg="%(message)s"'
     formatter = ContextualFormatter(log_format, datefmt='%Y-%m-%d %H:%M:%S')
 
-    # --- Main Info Logger ---
+    # --- Main Logger ---
     # Handles all logs from INFO level and up
+    run_ts = os.getenv("LOG_RUN_ID") or datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file_env = os.getenv("LOG_FILE")
+    global MAIN_LOG_PATH
+    MAIN_LOG_PATH = Path(log_file_env).expanduser().resolve() if log_file_env else LOG_DIR / f"sc-immocalcul-{run_ts}.log"
     main_handler = logging.handlers.RotatingFileHandler(
-        LOG_DIR / 'sc-immocalcul.log',
+        MAIN_LOG_PATH,
         maxBytes=5 * 1024 * 1024,  # 5 MB
         backupCount=5
     )
     main_handler.setFormatter(formatter)
     main_handler.setLevel(logging.INFO)
-
-    # --- Error Logger ---
-    # Handles only ERROR level logs
-    error_handler = logging.handlers.RotatingFileHandler(
-        LOG_DIR / 'error.log',
-        maxBytes=5 * 1024 * 1024,  # 5 MB
-        backupCount=5
-    )
-    error_handler.setFormatter(formatter)
-    error_handler.setLevel(logging.ERROR)
 
     # Get the root logger and attach the handlers
     root_logger = logging.getLogger()
@@ -55,7 +51,6 @@ def setup_logging():
     # Avoid adding handlers if they already exist (e.g., in interactive sessions)
     if not root_logger.handlers:
         root_logger.addHandler(main_handler)
-        root_logger.addHandler(error_handler)
         # Also log to console for easier debugging during development
         root_logger.addHandler(logging.StreamHandler())
 
@@ -69,24 +64,8 @@ def set_step(step_name: str):
     log_context['step'] = step_name
 
 def add_run_log_handler(run_label: str) -> Path:
-    """Attach a per-run log file handler and return its path."""
-    safe_label = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in run_label)
-    log_path = LOG_DIR / f"sc-immocalcul-{safe_label}.log"
-
-    root_logger = logging.getLogger()
-    for handler in root_logger.handlers:
-        if isinstance(handler, logging.FileHandler) and Path(handler.baseFilename) == log_path:
-            return log_path
-
-    log_format = '[%(asctime)s] LEVEL=%(levelname)s step=%(step)s msg="%(message)s"'
-    formatter = logging.Formatter(log_format, datefmt='%Y-%m-%d %H:%M:%S')
-
-    run_handler = logging.handlers.RotatingFileHandler(
-        log_path,
-        maxBytes=5 * 1024 * 1024,
-        backupCount=5
-    )
-    run_handler.setFormatter(formatter)
-    run_handler.setLevel(logging.INFO)
-    root_logger.addHandler(run_handler)
-    return log_path
+    """Return the current main log path (no extra per-run handler)."""
+    if MAIN_LOG_PATH:
+        return MAIN_LOG_PATH
+    fallback_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return LOG_DIR / f"sc-immocalcul-{fallback_ts}.log"

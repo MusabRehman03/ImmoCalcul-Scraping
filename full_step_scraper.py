@@ -670,17 +670,26 @@ async def capture_main_photo(page: Page, out_dir: Path, sc: StepCapture) -> Opti
         raw_path = out_dir / "main_photo_raw.png"
 
         img_src = await img_el.get_attribute("src")
+        # Prefer opening the full-size image in a new tab with the same context + referer
         if img_src:
             img_url = urljoin(page.url, img_src)
             new_page = await page.context.new_page()
             try:
-                await new_page.goto(img_url, wait_until="domcontentloaded", timeout=30000)
-                await new_page.wait_for_timeout(2000)
-                full_img = new_page.locator("img").first
-                if await full_img.count() > 0 and await full_img.is_visible(timeout=10000):
-                    await full_img.screenshot(path=str(raw_path))
+                await new_page.set_extra_http_headers({"Referer": page.url})
+                resp = await new_page.goto(img_url, wait_until="domcontentloaded", timeout=30000)
+                content_type = (resp.headers or {}).get("content-type", "") if resp else ""
+                if resp and resp.ok and content_type.startswith("image/"):
+                    await new_page.wait_for_timeout(500)
+                    full_img = new_page.locator("img").first
+                    if await full_img.count() > 0 and await full_img.is_visible(timeout=10000):
+                        await full_img.screenshot(path=str(raw_path))
+                    else:
+                        await new_page.screenshot(path=str(raw_path))
                 else:
-                    await new_page.screenshot(path=str(raw_path))
+                    logging.warning(
+                        f"Main photo URL did not return an image. status={resp.status if resp else 'none'} content-type={content_type}"
+                    )
+                    await img_el.screenshot(path=str(raw_path))
             finally:
                 await new_page.close()
         else:

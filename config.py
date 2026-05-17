@@ -186,8 +186,8 @@ class Config:
     COL_IMMOCALCUL: int = 63            # Column BL - ImmoCalcul
     
     # Retry Settings
-    MAX_RETRIES_PER_ROW: int = int(os.getenv("MAX_RETRIES_PER_ROW", "2"))
-    RETRY_DELAY: int = int(os.getenv("RETRY_DELAY", "5"))  # seconds
+    MAX_RETRIES_PER_ROW: int = int(os.getenv("MAX_RETRIES_PER_ROW", "4"))
+    RETRY_DELAY: int = int(os.getenv("RETRY_DELAY", "15"))  # seconds
     
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
